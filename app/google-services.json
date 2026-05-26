@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "520534760598",
+    "project_id": "talihayat-bfc99",
+    "storage_bucket": "talihayat-bfc99.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:520534760598:android:e8fa0a773ef4f0130236b7",
+        "android_client_info": {
+          "package_name": "com.group.talihayat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCPzJaBZERzcfSHTrynNPRux3xJUPQ2TbM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
