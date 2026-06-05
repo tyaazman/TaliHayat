@@ -1,4 +1,4 @@
-package com.group.talihayat
+package com.group.talihayat.ui.elderly
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
@@ -155,7 +156,7 @@ private fun ProtectionHubCard(cameraOnline: Boolean, modifier: Modifier = Modifi
 }
 
 @Composable
-private fun ProtectionRow(label: String, status: String, isActive: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+private fun ProtectionRow(label: String, status: String, isActive: Boolean, icon: ImageVector) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Box(
             modifier = Modifier.size(42.dp).background(if (isActive) ElderlyColors.NavySurface else ElderlyColors.GrayBorder.copy(alpha = 0.3f), CircleShape),
@@ -187,7 +188,7 @@ private fun DeviceAnalyticsGrid(batteryLevel: Int, cloudSynced: Boolean, modifie
 }
 
 @Composable
-private fun AnalyticsItem(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, modifier: Modifier) {
+private fun AnalyticsItem(label: String, value: String, icon: ImageVector, color: Color, modifier: Modifier) {
     Card(modifier = modifier, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = ElderlyColors.Surface), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(Modifier.padding(18.dp)) {
             Icon(imageVector = icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
