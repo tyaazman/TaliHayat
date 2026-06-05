@@ -1,14 +1,31 @@
-package com.group.talihayat
+package com.group.talihayat.ui.elderly
 
-import android.content.*
-import android.os.*
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import android.os.Build
+import android.os.Bundle
+import android.os.CountDownTimer
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
-import com.google.firebase.database.*
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
+import com.group.talihayat.service.FallDetectionService
 
 class ElderlyDashboardActivity : ComponentActivity() {
 
@@ -79,13 +96,17 @@ class ElderlyDashboardActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 ElderlyDashboardScreen(
-                    uiState      = uiState.value,
-                    countdown    = countdown.intValue,
+                    uiState = uiState.value,
+                    countdown = countdown.intValue,
                     batteryLevel = batteryLevel.intValue,
-                    cloudSynced  = cloudSynced.value,
+                    cloudSynced = cloudSynced.value,
                     cameraOnline = cameraOnline.value, // Pass camera status
-                    onCancel     = { cancelFall() },
-                    onSimulate   = { if (!isFallDetected) { isFallDetected = true; triggerFallUI() } }
+                    onCancel = { cancelFall() },
+                    onSimulate = {
+                        if (!isFallDetected) {
+                            isFallDetected = true; triggerFallUI()
+                        }
+                    }
                 )
             }
         }

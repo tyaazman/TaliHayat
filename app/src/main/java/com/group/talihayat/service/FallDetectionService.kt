@@ -1,14 +1,19 @@
-package com.group.talihayat
+package com.group.talihayat.service
 
-import android.app.*
-import android.content.*
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.os.*
+import android.os.Build
+import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlin.math.sqrt
 
@@ -23,12 +28,12 @@ class FallDetectionService : Service(), SensorEventListener {
         private const val CHANNEL_ID = "TaliHayat_Background_Channel"
         private const val NOTIFICATION_ID = 99
         private const val IMPACT_THRESHOLD = 2.5f // Realistic impact for a drop
-        private const val ALERT_COOLDOWN = 5000L 
+        private const val ALERT_COOLDOWN = 5000L
     }
 
     override fun onCreate() {
         super.onCreate()
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
         if (accelerometer == null) {
@@ -57,8 +62,8 @@ class FallDetectionService : Service(), SensorEventListener {
         if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER) {
             val gForce = sqrt(
                 (event.values[0] * event.values[0] +
-                 event.values[1] * event.values[1] +
-                 event.values[2] * event.values[2]).toDouble()
+                        event.values[1] * event.values[1] +
+                        event.values[2] * event.values[2]).toDouble()
             ).toFloat() / 9.81f
 
             if (gForce > IMPACT_THRESHOLD) {
@@ -66,10 +71,10 @@ class FallDetectionService : Service(), SensorEventListener {
                 if (currentTime - lastAlertTime > ALERT_COOLDOWN) {
                     lastAlertTime = currentTime
                     Log.e(TAG, "IMPACT DETECTED: $gForce G")
-                    
+
                     // Direct haptic feedback so you know the sensor worked
                     vibrate()
-                    
+
                     // Alert the Activity
                     val intent = Intent("com.group.talihayat.FALL_DETECTED")
                     intent.`package` = packageName
@@ -80,26 +85,26 @@ class FallDetectionService : Service(), SensorEventListener {
     }
 
     private fun vibrate() {
-        val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vm.defaultVibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vm.defaultVibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200), -1))
         } else {
             @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            val v = getSystemService(VIBRATOR_SERVICE) as Vibrator
+            v.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200), -1))
         }
-        // Double pulse
-        val effect = VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200), -1)
-        v.vibrate(effect)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Safety", NotificationManager.IMPORTANCE_LOW)
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
-        }
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Safety",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.createNotificationChannel(channel)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
