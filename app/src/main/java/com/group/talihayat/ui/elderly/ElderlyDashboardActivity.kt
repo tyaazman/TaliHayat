@@ -26,6 +26,10 @@ import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import com.group.talihayat.service.FallDetectionService
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 class ElderlyDashboardActivity : ComponentActivity() {
 
@@ -93,21 +97,38 @@ class ElderlyDashboardActivity : ComponentActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
+        // Find this block at the bottom of onCreate and update it:
         setContent {
             MaterialTheme {
-                ElderlyDashboardScreen(
-                    uiState = uiState.value,
-                    countdown = countdown.intValue,
-                    batteryLevel = batteryLevel.intValue,
-                    cloudSynced = cloudSynced.value,
-                    cameraOnline = cameraOnline.value, // Pass camera status
-                    onCancel = { cancelFall() },
-                    onSimulate = {
-                        if (!isFallDetected) {
-                            isFallDetected = true; triggerFallUI()
-                        }
+                // 👇 1. Define the screen state tracker here
+                var currentScreen by remember { mutableStateOf("dashboard") }
+
+                when (currentScreen) {
+                    "dashboard" -> {
+                        ElderlyDashboardScreen(
+                            uiState = uiState.value,
+                            countdown = countdown.intValue,
+                            batteryLevel = batteryLevel.intValue,
+                            cloudSynced = cloudSynced.value,
+                            cameraOnline = cameraOnline.value,
+                            onCancel = { cancelFall() },
+                            onSimulate = {
+                                if (!isFallDetected) {
+                                    isFallDetected = true; triggerFallUI()
+                                }
+                            },
+                            // 👇 2. Handle the avatar click to switch screens
+                            onAvatarClick = { currentScreen = "medical_setup" }
+                        )
                     }
-                )
+                    "medical_setup" -> {
+                        // 👇 3. Render the setup form screen when triggered
+                        EditElderlyMedicalScreen(
+                            onSaveClick = { currentScreen = "dashboard" },
+                            onBackClick = { currentScreen = "dashboard" }
+                        )
+                    }
+                }
             }
         }
     }

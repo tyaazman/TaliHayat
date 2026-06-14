@@ -15,20 +15,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
+import com.group.talihayat.ui.theme.*
 
-private object ElderlyColors {
-    val SafeBackground   = Color(0xFFF8F9FA)
-    val DangerBackground = Color(0xFFD32F2F)
-    val SentBackground   = Color(0xFF1B5E20)
-    val PrimaryText      = Color(0xFF1A1A1A)
-    val SecondaryText    = Color(0xFF616161)
-    val HeartbeatGreen   = Color(0xFF00C853)
-    val CancelYellow     = Color(0xFFFFD600)
-    val NavyBlue         = Color(0xFF1E3A5F)
-    val Surface          = Color(0xFFFFFFFF)
-    val NavySurface      = Color(0xFFE8EEF6)
-    val GrayBorder       = Color(0xFFE0E0E0)
-}
 
 enum class ElderlyUiState {
     MONITORING,       // Stable — sensor active, camera online
@@ -43,9 +31,10 @@ fun ElderlyDashboardScreen(
     countdown    : Int,
     batteryLevel : Int,
     cloudSynced  : Boolean,
-    cameraOnline : Boolean, // Tracks independent camera status
+    cameraOnline : Boolean,
     onCancel     : () -> Unit,
-    onSimulate   : () -> Unit 
+    onSimulate   : () -> Unit,
+    onAvatarClick: () -> Unit // 👈 ADD THIS PARAMETER
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         StableDashboard(
@@ -53,7 +42,8 @@ fun ElderlyDashboardScreen(
             batteryLevel = batteryLevel,
             cloudSynced  = cloudSynced,
             cameraOnline = cameraOnline,
-            onSimulate   = onSimulate
+            onSimulate   = onSimulate,
+            onAvatarClick = onAvatarClick // 👈 FORWARD IT HERE
         )
 
         AnimatedVisibility(
@@ -80,12 +70,18 @@ private fun StableDashboard(
     batteryLevel : Int,
     cloudSynced  : Boolean,
     cameraOnline : Boolean,
-    onSimulate   : () -> Unit
+    onSimulate   : () -> Unit,
+    onAvatarClick: () -> Unit // 👈 ADD THIS PARAMETER
 ) {
     Box(modifier = Modifier.fillMaxSize().background(ElderlyColors.SafeBackground)) {
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 36.dp)) {
             Spacer(Modifier.height(54.dp))
-            TopProfileHeader(onSimulate = onSimulate, modifier = Modifier.padding(horizontal = 24.dp))
+
+            TopProfileHeader(
+                onSimulate = onSimulate,
+                onAvatarClick = onAvatarClick,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
             Spacer(Modifier.height(28.dp))
             
             // Redesigned Card: Seperates Camera and Phone Sensor
@@ -102,12 +98,26 @@ private fun StableDashboard(
 }
 
 @Composable
-private fun TopProfileHeader(onSimulate: () -> Unit, modifier: Modifier = Modifier) {
+private fun TopProfileHeader(
+    onSimulate: () -> Unit,
+    onAvatarClick: () -> Unit, // 👈 ADD THIS PARAMETER
+    modifier: Modifier = Modifier
+) {
     Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(modifier = Modifier.size(58.dp).background(ElderlyColors.NavySurface, CircleShape).border(2.dp, ElderlyColors.NavyBlue.copy(0.1f), CircleShape), contentAlignment = Alignment.Center) {
+
+            // 👇 ADD THE CLICKABLE MODIFIER TO THIS BOX OVER THE EMOJI 👇
+            Box(
+                modifier = Modifier
+                    .size(58.dp)
+                    .background(ElderlyColors.NavySurface, CircleShape)
+                    .border(2.dp, ElderlyColors.NavyBlue.copy(0.1f), CircleShape)
+                    .clickable { onAvatarClick() }, // 👈 Makes the avatar clickable!
+                contentAlignment = Alignment.Center
+            ) {
                 Text("👴", fontSize = 26.sp)
             }
+
             Column {
                 Text(
                     text = "Good Morning!",

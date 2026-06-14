@@ -26,6 +26,13 @@ import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
 import com.group.talihayat.ui.theme.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 
 // ─────────────────────────────────────────────────
 //  STATE MODEL
@@ -66,11 +73,15 @@ class CaretakerDashboardActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CaretakerDashboardScreen() {
+    var isLinked by remember { mutableStateOf(false) }
     var appState by remember { mutableStateOf(ComponentState.NORMAL) }
+    var showPrivacySecurity by remember { mutableStateOf(false) }
 
     // ── NAVIGATION STATE ──
     var currentTab by remember { mutableStateOf("Home") }
     var showEditProfile by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
 
     // ── Global transition handle ──
     val transition = updateTransition(targetState = appState, label = "AppStateTransition")
@@ -99,96 +110,86 @@ fun CaretakerDashboardScreen() {
             .fillMaxSize()
             .background(Background)
     ) {
-        // ── Subtle ambient background blob ──
-        AmbientBlob(accentColor = accentColor, transition = transition)
-
-        // ── NAVIGATION ROUTER ──
-        if (showEditProfile) {
-            EditProfileScreen(onBackClick = { showEditProfile = false })
+        if (!isLinked) {
+            // 🤝 NEST 1: Show ONLY the pairing setup layout if not verified yet
+            LinkElderlyScreen(
+                onLinkSuccess = { isLinked = true }
+            )
         } else {
-            AnimatedContent(targetState = currentTab, label = "TabSwitch") { tab ->
-                when (tab) {
-                    "Home" -> {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(bottom = 96.dp)
-                        ) {
-                            // 1. Top Bar
-                            TaliTopBar(
-                                transition      = transition,
-                                accentColor     = accentColor,
-                                appState        = appState,
-                                onToggleState   = {
-                                    appState = if (appState == ComponentState.NORMAL)
-                                        ComponentState.ALERT else ComponentState.NORMAL
-                                }
-                            )
+            // 🏡 NEST 2: Everything inside this block is safely hidden until paired successfully!
 
-                            Spacer(modifier = Modifier.height(20.dp))
+            AmbientBlob(accentColor = accentColor, transition = transition)
 
-                            // 2. Status Overview Card
-                            StatusOverviewCard(
-                                transition  = transition,
-                                accentColor = accentColor,
-                                accentLight = accentLight,
-                                accentGlow  = accentGlow,
-                                appState    = appState,
-                                modifier    = Modifier.padding(horizontal = 20.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            // 3. Live Monitoring Grid
-                            LiveMonitoringGrid(
-                                transition  = transition,
-                                accentColor = accentColor,
-                                accentLight = accentLight,
-                                appState    = appState,
-                                modifier    = Modifier.padding(horizontal = 20.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(20.dp))
-
-                            // 4. Quick Stats Row
-                            QuickStatsRow(
-                                accentColor = accentColor,
-                                accentLight = accentLight,
-                                modifier    = Modifier.padding(horizontal = 20.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(24.dp))
-                        }
+            // ── SMOOTH SCREEN TRANSITION ROUTER ──
+            AnimatedContent(
+                targetState = showEditProfile,
+                transitionSpec = {
+                    if (targetState) {
+                        (slideInHorizontally { it } + fadeIn(tween(300))) togetherWith
+                                (slideOutHorizontally { -it / 3 } + fadeOut(tween(300)))
+                    } else {
+                        (slideInHorizontally { -it / 3 } + fadeIn(tween(300))) togetherWith
+                                (slideOutHorizontally { it } + fadeOut(tween(300)))
                     }
-                    "Reports" -> ReportsScreenFull()
-                    "Patient" -> PatientScreen()
-                    "Settings" -> SettingsScreen(
-                        onNavigateToEditProfile = { showEditProfile = true }
-                    )
+                },
+                label = "ProfileTransition"
+            ) { isEditing ->
+                if (isEditing) {
+                    EditProfileScreen(onBackClick = { showEditProfile = false })
+                } else {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AnimatedContent(targetState = currentTab, label = "TabSwitch") { tab ->
+                            when (tab) {
+                                "Home" -> CaretakerHomeScreen()
+                                "Reports" -> ReportsScreenFull()
+                                "Elder's Hub" -> PatientScreen()
+                                "Settings" -> SettingsScreen(
+                                    onNavigateToEditProfile = { showEditProfile = true },
+                                    onNavigateToPrivacySecurity = { showPrivacySecurity = true }
+                                )
+                            }
+                        }
+
+                        // Bottom Navigation
+                        TaliBottomNavHub(
+                            currentTab = currentTab,
+                            onTabSelected = { currentTab = it },
+                            accentColor = accentColor,
+                            accentGlow  = accentGlow,
+                            appState    = appState,
+                            onSosClick  = {
+                                val intent = Intent(Intent.ACTION_DIAL).apply {
+                                    data = Uri.parse("tel:999")
+                                }
+                                context.startActivity(intent)
+                            },
+                            modifier    = Modifier.align(Alignment.BottomCenter)
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = showPrivacySecurity,
+                    enter = slideInHorizontally(
+                        initialOffsetX = { fullWidth -> fullWidth },
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + fadeIn(animationSpec = tween(350)),
+                    exit = slideOutHorizontally(
+                        targetOffsetX = { fullWidth -> fullWidth },
+                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(300))
+                ) {
+                    PrivacySecurityScreen(onBackClick = { showPrivacySecurity = false })
                 }
             }
-        }
 
-        // 5. Bottom Navigation + FAB
-        if (!showEditProfile) {
-            TaliBottomNavHub(
-                currentTab = currentTab,
-                onTabSelected = { currentTab = it },
-                accentColor = accentColor,
-                accentGlow  = accentGlow,
-                appState    = appState,
-                onSosClick  = { appState = ComponentState.ALERT },
-                modifier    = Modifier.align(Alignment.BottomCenter)
+            // Sliding Alert Sheet (Stays safely contained within the active dashboard view)
+            SlidingAlertSheet(
+                visible  = appState == ComponentState.ALERT,
+                onDismiss = { appState = ComponentState.NORMAL },
+                onFullScreen = { /* Handle navigation */ }
             )
-        }
-
-        // 6. Sliding Alert Sheet
-        SlidingAlertSheet(
-            visible  = appState == ComponentState.ALERT,
-            onDismiss = { appState = ComponentState.NORMAL },
-            onFullScreen = { /* Handle navigation */ }
-        )
+        } // 🟢 Closes the if/else routing switch block cleanly
     }
 }
 
@@ -446,7 +447,7 @@ fun StatusOverviewCard(
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = if (appState == ComponentState.NORMAL)
-                        "Patient is safe and actively monitored via AI-powered sensors."
+                        "The elderly is safe and actively monitored via AI-powered sensors."
                     else
                         "Abnormal motion pattern detected. Immediate verification required.",
                     fontSize   = 12.sp,
@@ -864,21 +865,7 @@ fun TaliBottomNavHub(
     onSosClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val sosInfinite = rememberInfiniteTransition(label = "SosPulse")
-    val sosGlow by sosInfinite.animateFloat(
-        initialValue = 0.3f, targetValue = 0.7f,
-        animationSpec = infiniteRepeatable(
-            animation  = tween(1200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ), label = "SosGlow"
-    )
-    val sosScale by sosInfinite.animateFloat(
-        initialValue = 1f, targetValue = 1.12f,
-        animationSpec = infiniteRepeatable(
-            animation  = tween(1200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ), label = "SosScale"
-    )
+    // ANIMATIONS REMOVED to make the button static
 
     Box(
         modifier = modifier
@@ -906,17 +893,18 @@ fun TaliBottomNavHub(
             NavItem(Icons.Filled.Home, "Home", currentTab == "Home", accentColor) { onTabSelected("Home") }
             NavItem(Icons.Filled.Analytics, "Reports", currentTab == "Reports", accentColor) { onTabSelected("Reports") }
 
-            // SOS FAB (center)
+            // SOS FAB (center) - STATIC & RED
             Box(contentAlignment = Alignment.Center) {
                 Box(
                     modifier = Modifier
-                        .size((70 * sosScale).dp)
-                        .background(Brush.radialGradient(listOf(accentGlow.copy(alpha = sosGlow), Color.Transparent)), CircleShape)
-                )
-                Box(
-                    modifier = Modifier
                         .size(58.dp)
-                        .background(Brush.radialGradient(listOf(accentColor, accentColor.copy(alpha = 0.8f))), CircleShape)
+                        .background(
+                            brush = Brush.radialGradient(
+                                // Forced to Crimson (Red) instead of changing with accentColor
+                                listOf(Crimson, Crimson.copy(alpha = 0.8f))
+                            ),
+                            shape = CircleShape
+                        )
                         .clickable { onSosClick() },
                     contentAlignment = Alignment.Center
                 ) {
@@ -924,8 +912,9 @@ fun TaliBottomNavHub(
                 }
             }
 
+            // Right nav items
+            NavItem(Icons.Filled.Person, "Elder's Hub", currentTab == "Elder's Hub", accentColor) { onTabSelected("Elder's Hub") }
             NavItem(Icons.Filled.Settings, "Settings", currentTab == "Settings", accentColor) { onTabSelected("Settings") }
-            NavItem(Icons.Filled.Person, "Patient", currentTab == "Patient", accentColor) { onTabSelected("Patient") }
         }
     }
 }

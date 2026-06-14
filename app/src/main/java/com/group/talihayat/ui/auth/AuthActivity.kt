@@ -17,9 +17,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.*
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.*
@@ -36,6 +38,7 @@ enum class AuthScreen { LOGIN, REGISTER }
 // ─────────────────────────────────────────────────
 
 private object Validators {
+
     private val emailRegex = Regex("^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$")
     private val myPhoneRegex = Regex("^(\\+?6?01)[0-46-9]-*[0-9]{7,8}$")
 
@@ -159,11 +162,29 @@ fun AmbientDecor() {
 
 @Composable
 fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current // Used to control keyboard jumps
+
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var emailError by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf<String?>(null) }
+
+    // Reusable login function mapped to both the Button and Keyboard Enter Key
+    val attemptLogin = {
+        focusManager.clearFocus() // Drops the keyboard
+        emailError = Validators.email(email)
+        passwordError = Validators.loginPassword(password)
+        if (emailError == null && passwordError == null) {
+            val role = if (email.contains("elderly")) "Elderly" else "Caretaker"
+            if (password == "pass123") {
+                isLoading = true
+                onLoginSuccess(role)
+            } else {
+                passwordError = "Incorrect password"
+            }
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding(),
@@ -189,19 +210,28 @@ fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Un
                 value = email,
                 onValueChange = { email = it; emailError = null },
                 label = "Email Address",
-                placeholder = "elderly@tali.com",
+                placeholder = "Email address",
                 leadingIcon = Icons.Outlined.Email,
                 keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next,
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) } // Jump down on Next
+                ),
                 isError = emailError != null,
                 errorMessage = emailError
             )
             Spacer(Modifier.height(14.dp))
             TaliTextField(
                 value = password,
-                onValueChange = { password = it; passwordError = null },
+                // Automatically removes spaces dynamically as the user types
+                onValueChange = { password = it.replace(" ", ""); passwordError = null },
                 label = "Password",
                 placeholder = "Your password",
                 leadingIcon = Icons.Outlined.Lock,
+                imeAction = ImeAction.Done,
+                keyboardActions = KeyboardActions(
+                    onDone = { attemptLogin() } // Triggers login on Done
+                ),
                 isPassword = true,
                 isError = passwordError != null,
                 errorMessage = passwordError
@@ -210,15 +240,7 @@ fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Un
             TaliPrimaryButton(
                 text = "Sign In",
                 isLoading = isLoading,
-                onClick = {
-                    emailError = Validators.email(email)
-                    passwordError = Validators.loginPassword(password)
-                    if (emailError == null && passwordError == null) {
-                        val role = if (email.contains("elderly")) "Elderly" else "Caretaker"
-                        if (password == "pass123") { isLoading = true; onLoginSuccess(role) }
-                        else { passwordError = "Incorrect password" }
-                    }
-                }
+                onClick = { attemptLogin() }
             )
         }
         Spacer(Modifier.height(28.dp))
@@ -231,6 +253,8 @@ fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Un
 
 @Composable
 fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
+
     var selectedRole by remember { mutableStateOf("Caregiver / Family") }
     var email by remember { mutableStateOf("") }
     var phoneNumber by remember { mutableStateOf("") }
@@ -263,13 +287,53 @@ fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) ->
             Spacer(Modifier.height(10.dp))
             RoleSelector(roles = listOf("Caregiver / Family", "Elderly"), selectedRole = selectedRole, onSelect = { selectedRole = it })
             Spacer(Modifier.height(22.dp))
-            TaliTextField(value = email, onValueChange = { email = it; emailError = null }, label = "Email Address", placeholder = "your@email.com", leadingIcon = Icons.Outlined.Email, keyboardType = KeyboardType.Email, isError = emailError != null, errorMessage = emailError)
+            TaliTextField(
+                value = email,
+                onValueChange = { email = it; emailError = null },
+                label = "Email Address",
+                placeholder = "your@email.com",
+                leadingIcon = Icons.Outlined.Email,
+                keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next,
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                isError = emailError != null, errorMessage = emailError
+            )
             Spacer(Modifier.height(14.dp))
-            TaliTextField(value = phoneNumber, onValueChange = { phoneNumber = it; phoneError = null }, label = "Phone Number", placeholder = "0123456789", leadingIcon = Icons.Outlined.Phone, keyboardType = KeyboardType.Phone, isError = phoneError != null, errorMessage = phoneError)
+            TaliTextField(
+                value = phoneNumber,
+                onValueChange = { phoneNumber = it; phoneError = null },
+                label = "Phone Number",
+                placeholder = "0123456789",
+                leadingIcon = Icons.Outlined.Phone,
+                keyboardType = KeyboardType.Phone,
+                imeAction = ImeAction.Next,
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                isError = phoneError != null, errorMessage = phoneError
+            )
             Spacer(Modifier.height(14.dp))
-            TaliTextField(value = password, onValueChange = { password = it; passwordError = null }, label = "Password", placeholder = "Min. 8 characters", leadingIcon = Icons.Outlined.Lock, isPassword = true, isError = passwordError != null, errorMessage = passwordError)
+            TaliTextField(
+                value = password,
+                onValueChange = { password = it.replace(" ", ""); passwordError = null }, // Block spaces
+                label = "Password",
+                placeholder = "Min. 8 characters",
+                leadingIcon = Icons.Outlined.Lock,
+                isPassword = true,
+                imeAction = ImeAction.Next,
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                isError = passwordError != null, errorMessage = passwordError
+            )
             Spacer(Modifier.height(14.dp))
-            TaliTextField(value = confirmPassword, onValueChange = { confirmPassword = it; confirmPasswordError = null }, label = "Confirm Password", placeholder = "Re-enter password", leadingIcon = Icons.Outlined.LockOpen, isPassword = true, isError = confirmPasswordError != null, errorMessage = confirmPasswordError)
+            TaliTextField(
+                value = confirmPassword,
+                onValueChange = { confirmPassword = it.replace(" ", ""); confirmPasswordError = null }, // Block spaces
+                label = "Confirm Password",
+                placeholder = "Re-enter password",
+                leadingIcon = Icons.Outlined.LockOpen,
+                isPassword = true,
+                imeAction = ImeAction.Done,
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                isError = confirmPasswordError != null, errorMessage = confirmPasswordError
+            )
             Spacer(Modifier.height(28.dp))
             TaliPrimaryButton(text = "Create Account", isLoading = false, onClick = {
                 emailError = Validators.email(email); phoneError = Validators.phone(phoneNumber); passwordError = Validators.password(password); confirmPasswordError = Validators.confirmPassword(password, confirmPassword)
@@ -320,7 +384,19 @@ fun RoleSelector(roles: List<String>, selectedRole: String, onSelect: (String) -
 }
 
 @Composable
-fun TaliTextField(value: String, onValueChange: (String) -> Unit, label: String, placeholder: String, leadingIcon: ImageVector, keyboardType: KeyboardType = KeyboardType.Text, isPassword: Boolean = false, isError: Boolean = false, errorMessage: String? = null) {
+fun TaliTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String,
+    leadingIcon: ImageVector,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    imeAction: ImeAction = ImeAction.Next,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    isPassword: Boolean = false,
+    isError: Boolean = false,
+    errorMessage: String? = null
+) {
     var showPassword by remember { mutableStateOf(false) }
     Column {
         Text(label, fontSize = 12.sp, color = if (isError) Error else GrayMuted, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 6.dp))
@@ -329,7 +405,8 @@ fun TaliTextField(value: String, onValueChange: (String) -> Unit, label: String,
             leadingIcon = { Icon(leadingIcon, contentDescription = null, tint = if (isError) Error else Teal, modifier = Modifier.size(20.dp)) },
             trailingIcon = if (isPassword) { { IconButton(onClick = { showPassword = !showPassword }) { Icon(if (showPassword) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, contentDescription = null, tint = if (isError) Error else GrayMuted) } } } else if (isError) { { Icon(Icons.Filled.Error, contentDescription = null, tint = Error) } } else null,
             visualTransformation = if (isPassword && !showPassword) PasswordVisualTransformation() else VisualTransformation.None,
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Next),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
+            keyboardActions = keyboardActions,
             modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), singleLine = true, isError = isError,
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Teal, unfocusedBorderColor = InputBorder, cursorColor = Teal, errorBorderColor = Error)
         )
