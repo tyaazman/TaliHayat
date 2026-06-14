@@ -30,3 +30,66 @@ val AmberLight     = Color(0xFFFFF8E1)
 val CancelYellow   = Color(0xFFFFD600)
 val SentBackground = Color(0xFF1B5E20)
 val DangerBackground = Color(0xFFD32F2F)
+
+val LBackground    = Background
+val LSurface       = Surface
+val LTealSafe      = Teal
+val LTealDark      = TealDark
+val LTealLight     = TealLight
+val LCrimsonAlert  = Crimson
+val LNavy          = Navy
+val LNavyLight     = NavySurface
+val LGrayMuted     = GrayMuted
+val LGrayLight     = GrayLight
+val LSuccessGreen  = HeartbeatGreen
+val LSuccessLight  = HeartbeatGreen.copy(alpha = 0.12f)
+val LCardShadow    = CardShadow
+
+// 🟢 Paste this right underneath your package imports around line 36:
+
+object TaliColors {
+    val Background    = com.group.talihayat.ui.theme.Background
+    val Surface       = com.group.talihayat.ui.theme.Surface
+    val TealSafe      = com.group.talihayat.ui.theme.Teal
+    val TealLight     = com.group.talihayat.ui.theme.TealLight
+    val TealDark      = com.group.talihayat.ui.theme.TealDark
+    val CrimsonAlert  = com.group.talihayat.ui.theme.Crimson
+    val CrimsonLight  = com.group.talihayat.ui.theme.CrimsonLight
+    val Navy          = com.group.talihayat.ui.theme.Navy
+    val NavyLight     = com.group.talihayat.ui.theme.NavySurface
+    val GrayMuted     = com.group.talihayat.ui.theme.GrayMuted
+    val GrayLight     = com.group.talihayat.ui.theme.GrayLight
+    val CardShadow    = com.group.talihayat.ui.theme.CardShadow
+    val Divider       = com.group.talihayat.ui.theme.InputBorder
+    val GreenOnline   = com.group.talihayat.ui.theme.GreenOnline
+    val AmberWarning  = com.group.talihayat.ui.theme.AmberWarning
+}
+
+object ElderlyColors {
+    val Background       = com.group.talihayat.ui.theme.Background
+    val Surface          = com.group.talihayat.ui.theme.Surface
+    val PrimaryText      = com.group.talihayat.ui.theme.PrimaryText
+    val SecondaryText    = com.group.talihayat.ui.theme.SecondaryText
+    val Teal             = com.group.talihayat.ui.theme.Teal
+    val TealLight        = com.group.talihayat.ui.theme.TealLight
+    val TealDark         = com.group.talihayat.ui.theme.TealDark
+    val Crimson          = com.group.talihayat.ui.theme.Crimson
+    val CrimsonLight     = com.group.talihayat.ui.theme.CrimsonLight
+    val Navy             = com.group.talihayat.ui.theme.Navy
+    val NavyBlue       = com.group.talihayat.ui.theme.Navy
+    val NavyDark         = com.group.talihayat.ui.theme.NavyDark
+    val NavySurface      = com.group.talihayat.ui.theme.NavySurface
+    val GrayMuted        = com.group.talihayat.ui.theme.GrayMuted
+    val GrayLight        = com.group.talihayat.ui.theme.GrayLight
+    val GrayBorder       = com.group.talihayat.ui.theme.GrayBorder
+    val CardShadow       = com.group.talihayat.ui.theme.CardShadow
+    val GreenOnline      = com.group.talihayat.ui.theme.GreenOnline
+    val AmberWarning     = com.group.talihayat.ui.theme.AmberWarning
+    val AmberLight       = com.group.talihayat.ui.theme.AmberLight
+    val SafeBackground = Color(0xFFE8F5E9)
+    val HeartbeatGreen   = com.group.talihayat.ui.theme.HeartbeatGreen
+    val CancelYellow     = com.group.talihayat.ui.theme.CancelYellow
+    val SentBackground   = com.group.talihayat.ui.theme.SentBackground
+    val DangerBackground = com.group.talihayat.ui.theme.DangerBackground
+}
+
