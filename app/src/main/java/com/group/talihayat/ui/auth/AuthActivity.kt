@@ -25,6 +25,12 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.*
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException // 🟢 Added for handling email collision checks
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.ValueEventListener
 import com.group.talihayat.ui.caretaker.CaretakerDashboardActivity
 import com.group.talihayat.ui.elderly.ElderlyDashboardActivity
 import com.group.talihayat.ui.splash.TaliHayatSplashScreen
@@ -33,12 +39,7 @@ import kotlin.math.*
 
 enum class AuthScreen { LOGIN, REGISTER }
 
-// ─────────────────────────────────────────────────
-//  VALIDATION HELPERS
-// ─────────────────────────────────────────────────
-
 private object Validators {
-
     private val emailRegex = Regex("^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$")
     private val myPhoneRegex = Regex("^(\\+?6?01)[0-46-9]-*[0-9]{7,8}$")
 
@@ -66,7 +67,7 @@ private object Validators {
     fun phone(value: String): String? = when {
         value.isBlank()              -> "Phone number cannot be empty"
         !myPhoneRegex.matches(value) -> "Enter a valid Malaysian number"
-        else                         -> null
+        else                       -> null
     }
 }
 
@@ -85,15 +86,41 @@ class AuthActivity : ComponentActivity() {
                     if (isSplashVisible) {
                         TaliHayatSplashScreen(onTimeout = { showSplash = false })
                     } else {
+                        // Inside AuthActivity.kt -> onCreate -> setContent
                         TaliHayatAuthHost(
-                            onAuthSuccess = { role ->
-                                val destination = if (role == "Elderly") {
-                                    ElderlyDashboardActivity::class.java
-                                } else {
-                                    CaretakerDashboardActivity::class.java
-                                }
-                                startActivity(Intent(this@AuthActivity, destination))
-                                finish()
+                            onAuthSuccess = { uid ->
+                                val database = FirebaseDatabase.getInstance(
+                                    "https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/"
+                                ).reference
+
+                                database.child("users").child(uid).addListenerForSingleValueEvent(object : ValueEventListener {
+                                    override fun onDataChange(snapshot: DataSnapshot) {
+                                        // 1. Grab the role string exactly as it is saved in Firebase
+                                        val roleFromDb = snapshot.child("role").getValue(String::class.java) ?: "Caretaker"
+                                        val name = snapshot.child("name").getValue(String::class.java) ?: "User"
+
+                                        // 2. Perform a strict, case-insensitive check
+                                        val destination = if (roleFromDb.trim().equals("Elderly", ignoreCase = true)) {
+                                            // 🟢 This guarantees the Elderly user gets the Elderly layout!
+                                            com.group.talihayat.ui.elderly.ElderlyDashboardActivity::class.java
+                                        } else {
+                                            // 🟢 Caregivers get the Caretaker layout
+                                            com.group.talihayat.ui.caretaker.CaretakerDashboardActivity::class.java
+                                        }
+
+                                        val intent = Intent(this@AuthActivity, destination)
+                                        intent.putExtra("USER_NAME", name)
+
+                                        // Clear the back stack so they can't accidentally press 'back' to return to the login screen
+                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+
+                                        startActivity(intent)
+                                        finish()
+                                    }
+                                    override fun onCancelled(error: DatabaseError) {
+                                        // Handle error
+                                    }
+                                })
                             }
                         )
                     }
@@ -162,7 +189,7 @@ fun AmbientDecor() {
 
 @Composable
 fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Unit) {
-    val focusManager = LocalFocusManager.current // Used to control keyboard jumps
+    val focusManager = LocalFocusManager.current
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -170,19 +197,34 @@ fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Un
     var emailError by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf<String?>(null) }
 
-    // Reusable login function mapped to both the Button and Keyboard Enter Key
+    val auth = FirebaseAuth.getInstance()
+    val database = FirebaseDatabase.getInstance(
+        "https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/"
+    ).reference
+
     val attemptLogin = {
-        focusManager.clearFocus() // Drops the keyboard
+        focusManager.clearFocus()
         emailError = Validators.email(email)
         passwordError = Validators.loginPassword(password)
+
         if (emailError == null && passwordError == null) {
-            val role = if (email.contains("elderly")) "Elderly" else "Caretaker"
-            if (password == "pass123") {
-                isLoading = true
-                onLoginSuccess(role)
-            } else {
-                passwordError = "Incorrect password"
-            }
+            isLoading = true
+            auth.signInWithEmailAndPassword(email, password)
+                .addOnSuccessListener { authResult ->
+                    val uid = authResult.user?.uid
+                    if (uid != null) {
+                        isLoading = false
+                        // 🟢 FIXED: Pass the UID to the router, NOT the role string!
+                        onLoginSuccess(uid)
+                    } else {
+                        isLoading = false
+                    }
+                }
+                .addOnFailureListener {
+                    emailError = ""
+                    passwordError = "Invalid email or password address"
+                    isLoading = false
+                }
         }
     }
 
@@ -215,7 +257,7 @@ fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Un
                 keyboardType = KeyboardType.Email,
                 imeAction = ImeAction.Next,
                 keyboardActions = KeyboardActions(
-                    onNext = { focusManager.moveFocus(FocusDirection.Down) } // Jump down on Next
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
                 ),
                 isError = emailError != null,
                 errorMessage = emailError
@@ -223,14 +265,13 @@ fun LoginScreen(onNavigateToRegister: () -> Unit, onLoginSuccess: (String) -> Un
             Spacer(Modifier.height(14.dp))
             TaliTextField(
                 value = password,
-                // Automatically removes spaces dynamically as the user types
                 onValueChange = { password = it.replace(" ", ""); passwordError = null },
                 label = "Password",
                 placeholder = "Your password",
                 leadingIcon = Icons.Outlined.Lock,
                 imeAction = ImeAction.Done,
                 keyboardActions = KeyboardActions(
-                    onDone = { attemptLogin() } // Triggers login on Done
+                    onDone = { attemptLogin() }
                 ),
                 isPassword = true,
                 isError = passwordError != null,
@@ -260,11 +301,19 @@ fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) ->
     var phoneNumber by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var fullName by remember { mutableStateOf("") }
 
+    var nameError by remember { mutableStateOf<String?>(null) }
     var emailError by remember { mutableStateOf<String?>(null) }
     var phoneError by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf<String?>(null) }
     var confirmPasswordError by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    val auth = FirebaseAuth.getInstance()
+    val database = FirebaseDatabase.getInstance(
+        "https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/"
+    ).reference
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding(),
@@ -287,6 +336,16 @@ fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) ->
             Spacer(Modifier.height(10.dp))
             RoleSelector(roles = listOf("Caregiver / Family", "Elderly"), selectedRole = selectedRole, onSelect = { selectedRole = it })
             Spacer(Modifier.height(22.dp))
+            TaliTextField(
+                value = fullName,
+                onValueChange = { fullName = it; nameError = null },
+                label = "Full Name",
+                placeholder = "Enter your full name",
+                leadingIcon = Icons.Outlined.Person,
+                isError = nameError != null,
+                errorMessage = nameError
+            )
+            Spacer(Modifier.height(14.dp))
             TaliTextField(
                 value = email,
                 onValueChange = { email = it; emailError = null },
@@ -313,7 +372,7 @@ fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) ->
             Spacer(Modifier.height(14.dp))
             TaliTextField(
                 value = password,
-                onValueChange = { password = it.replace(" ", ""); passwordError = null }, // Block spaces
+                onValueChange = { password = it.replace(" ", ""); passwordError = null },
                 label = "Password",
                 placeholder = "Min. 8 characters",
                 leadingIcon = Icons.Outlined.Lock,
@@ -325,7 +384,7 @@ fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) ->
             Spacer(Modifier.height(14.dp))
             TaliTextField(
                 value = confirmPassword,
-                onValueChange = { confirmPassword = it.replace(" ", ""); confirmPasswordError = null }, // Block spaces
+                onValueChange = { confirmPassword = it.replace(" ", ""); confirmPasswordError = null },
                 label = "Confirm Password",
                 placeholder = "Re-enter password",
                 leadingIcon = Icons.Outlined.LockOpen,
@@ -335,9 +394,56 @@ fun RegisterScreen(onNavigateToLogin: () -> Unit, onRegisterSuccess: (String) ->
                 isError = confirmPasswordError != null, errorMessage = confirmPasswordError
             )
             Spacer(Modifier.height(28.dp))
-            TaliPrimaryButton(text = "Create Account", isLoading = false, onClick = {
-                emailError = Validators.email(email); phoneError = Validators.phone(phoneNumber); passwordError = Validators.password(password); confirmPasswordError = Validators.confirmPassword(password, confirmPassword)
-                if (listOf(emailError, phoneError, passwordError, confirmPasswordError).all { it == null }) onRegisterSuccess(if (selectedRole == "Elderly") "Elderly" else "Caretaker")
+            TaliPrimaryButton(text = "Create Account", isLoading = isLoading, onClick = {
+                emailError = Validators.email(email)
+                phoneError = Validators.phone(phoneNumber)
+                passwordError = Validators.password(password)
+                confirmPasswordError = Validators.confirmPassword(password, confirmPassword)
+                nameError = if (fullName.isBlank()) "Name cannot be empty" else null
+
+                // Only proceed if ALL fields have zero errors
+                if (listOf(emailError, phoneError, passwordError, confirmPasswordError, nameError).all { it == null }) {
+                    isLoading = true
+                    auth.createUserWithEmailAndPassword(email, password)
+                        .addOnSuccessListener { authResult ->
+                            val uid = authResult.user?.uid
+
+                            // 🟢 FIXED: Safety check for UID to clear the String mismatch error
+                            if (uid != null) {
+                                // 🟢 FIXED: Translate UI selection into backend database role string
+                                val targetRole = if (selectedRole == "Elderly") "Elderly" else "Caretaker"
+
+                                val userProfile = mapOf(
+                                    "email" to email,
+                                    "phone" to phoneNumber,
+                                    "role"  to targetRole,
+                                    "name"  to fullName
+                                )
+
+                                database.child("users").child(uid).setValue(userProfile)
+                                    .addOnSuccessListener {
+                                        isLoading = false
+                                        // 🟢 FIXED: Pass the UID to the router so it can fetch the Name!
+                                        onRegisterSuccess(uid)
+                                    }
+                                    .addOnFailureListener {
+                                        isLoading = false
+                                        confirmPasswordError = "Failed to save database profile parameters"
+                                    }
+                            } else {
+                                isLoading = false
+                                emailError = "Account created but user ID is missing"
+                            }
+                        }
+                        .addOnFailureListener { exception ->
+                            isLoading = false
+                            if (exception is FirebaseAuthUserCollisionException) {
+                                emailError = "Email address already in use"
+                            } else {
+                                emailError = exception.localizedMessage ?: "Registration error encountered"
+                            }
+                        }
+                }
             })
         }
         Spacer(Modifier.height(24.dp))

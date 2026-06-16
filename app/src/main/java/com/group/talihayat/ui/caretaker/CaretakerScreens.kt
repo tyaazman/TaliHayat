@@ -1604,13 +1604,14 @@ private val HomeNavyGrad    = Color(0xFF2D5288)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CaretakerHomeScreen() {
+fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
 
     val coroutineScope = rememberCoroutineScope()
     var isRefreshing by remember { mutableStateOf(false) }
 
-    // ── Notification badge state ─────────────────────────────────────────────
+    // ── Notification badge & dialog states ───────────────────────────────────
     val hasUnseenAlerts = remember { mutableStateOf(true) }
+    var showNotificationDialog by remember { mutableStateOf(false) } // 🟢 Tracks the modal state
 
     // ── Breathing animation for the safe-status green ring ───────────────────
     val breatheInfinite = rememberInfiniteTransition(label = "SafeBreath")
@@ -1636,7 +1637,6 @@ fun CaretakerHomeScreen() {
         label = "LiveDotScale"
     )
 
-    // 🟢 PullToRefreshBox opens here (with the non-supported colors removed)
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = {
@@ -1703,7 +1703,10 @@ fun CaretakerHomeScreen() {
                                     ambientColor = TaliColors.CardShadow,
                                     spotColor    = TaliColors.CardShadow)
                                 .background(TaliColors.Background, CircleShape)
-                                .clickable { hasUnseenAlerts.value = false },
+                                .clickable {
+                                    hasUnseenAlerts.value = false
+                                    showNotificationDialog = true // 🟢 Opens the notification system overlay
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -1714,7 +1717,7 @@ fun CaretakerHomeScreen() {
                             )
                         }
 
-                        this@Row.AnimatedVisibility( // 🟢 Add "this@Row." right here
+                        this@Row.AnimatedVisibility(
                             visible = hasUnseenAlerts.value,
                             enter   = scaleIn(animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)),
                             exit    = scaleOut()
@@ -1859,26 +1862,6 @@ fun CaretakerHomeScreen() {
 
                         Spacer(Modifier.height(12.dp))
 
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text       = "72",
-                                fontSize   = 30.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color      = HomeHeartRed
-                            )
-                            Text(
-                                text     = " bpm",
-                                fontSize = 13.sp,
-                                color    = HomeHeartRed.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                        }
-
-                        Text(
-                            text     = "Normal heart rate",
-                            fontSize = 12.sp,
-                            color    = TaliColors.GrayMuted
-                        )
                     }
                 }
 
@@ -1902,10 +1885,13 @@ fun CaretakerHomeScreen() {
 
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(
-                                text       = "87%",
+                                text       = "$elderlyBattery%", // 🟢 Displays live cloud battery level!
                                 fontSize   = 30.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color      = TaliColors.Navy
+                            fontWeight = FontWeight.ExtraBold,
+                            color      = when {
+                                elderlyBattery <= 20 -> TaliColors.CrimsonAlert // Turn red if critically low!
+                                else -> TaliColors.Navy
+                            }
                             )
                         }
 
@@ -2066,21 +2052,15 @@ fun CaretakerHomeScreen() {
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
                         HomeSummaryStat(
-                            value     = "0",
-                            label     = "Falls\nDetected",
-                            valueColor = HomeLiveBadge
+                            value     = "%,d".format(elderlySteps), // 🟢 Injects your live synced steps!
+                            label     = "Steps\nToday",
+                            valueColor = TaliColors.Navy
                         )
                         HomeStatDivider()
                         HomeSummaryStat(
                             value     = "8h 14m",
                             label     = "Active\nToday",
                             valueColor = TaliColors.TealSafe
-                        )
-                        HomeStatDivider()
-                        HomeSummaryStat(
-                            value     = "1,340",
-                            label     = "Steps\nToday",
-                            valueColor = TaliColors.Navy
                         )
                     }
                 }
@@ -2138,7 +2118,79 @@ fun CaretakerHomeScreen() {
                 }
             }
         }
-    } // 🟢 PullToRefreshBox closes here properly, separating it from the functions below!
+
+        // ── 🟢 NEW: CARETAKERS SYSTEM NOTIFICATION OVERLAY DIALOG ─────────────
+        if (showNotificationDialog) {
+            AlertDialog(
+                onDismissRequest = { showNotificationDialog = false },
+                containerColor   = TaliColors.Surface,
+                shape            = RoundedCornerShape(24.dp),
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.NotificationsActive,
+                            contentDescription = null,
+                            tint = TaliColors.Navy,
+                            modifier = Modifier.size(26.dp)
+                        )
+                        Text(
+                            text = "Recent Logs",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = TaliColors.Navy
+                        )
+                    }
+                },
+                text = {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        CaretakerNotificationRow(
+                            icon = Icons.Filled.Warning,
+                            iconColor = TaliColors.CrimsonAlert,
+                            iconBg = TaliColors.CrimsonLight,
+                            title = "Critical Fall Warning",
+                            time = "2:14 PM",
+                            description = "Dato' Ahmad Razali — Impact registered in Living Room Node."
+                        )
+                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
+
+                        CaretakerNotificationRow(
+                            icon = Icons.Filled.BatteryAlert,
+                            iconColor = TaliColors.AmberWarning,
+                            iconBg = Color(0xFFFFF8E1),
+                            title = "Low Battery Log",
+                            time = "9:05 AM",
+                            description = "Elderly primary phone tracking device dropped below 18%."
+                        )
+                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
+
+                        CaretakerNotificationRow(
+                            icon = Icons.Filled.CheckCircle,
+                            iconColor = TaliColors.TealSafe,
+                            iconBg = TaliColors.TealLight,
+                            title = "All Systems Online",
+                            time = "8:00 AM",
+                            description = "Hardware handshake completed. All sensor fields running safely."
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showNotificationDialog = false },
+                        shape   = RoundedCornerShape(14.dp),
+                        colors  = ButtonDefaults.buttonColors(containerColor = TaliColors.Navy)
+                    ) {
+                        Text(text = "Close", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+            )
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2279,3 +2331,38 @@ fun CaretakerHomeScreen() {
             )
         }
     }
+
+@Composable
+private fun CaretakerNotificationRow(
+    icon: ImageVector,
+    iconColor: Color,
+    iconBg: Color,
+    title: String,
+    time: String,
+    description: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier.size(38.dp).background(iconBg, RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(imageVector = icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                Text(text = time, fontSize = 11.sp, color = TaliColors.GrayMuted)
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(text = description, fontSize = 12.sp, color = TaliColors.GrayMuted, lineHeight = 16.sp)
+        }
+    }
+}
