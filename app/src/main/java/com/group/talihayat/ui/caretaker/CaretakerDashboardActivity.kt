@@ -3,6 +3,7 @@ package com.group.talihayat.ui.caretaker
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -25,14 +26,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.*
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import com.group.talihayat.ui.theme.*
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 
 // ─────────────────────────────────────────────────
 //  STATE MODEL
@@ -74,19 +73,84 @@ class CaretakerDashboardActivity : ComponentActivity() {
 @Composable
 fun CaretakerDashboardScreen() {
     var isLinked by remember { mutableStateOf(false) }
+    var isCheckingStatus by remember { mutableStateOf(true) }
+    var elderlyBattery by remember { mutableIntStateOf(100) }
+
     var appState by remember { mutableStateOf(ComponentState.NORMAL) }
     var showPrivacySecurity by remember { mutableStateOf(false) }
-
-    // ── NAVIGATION STATE ──
     var currentTab by remember { mutableStateOf("Home") }
     var showEditProfile by remember { mutableStateOf(false) }
 
-    val context = LocalContext.current
+    // 🟢 Track Live Steps from Firebase
+    var elderlySteps by remember { mutableIntStateOf(0) }
 
-    // ── Global transition handle ──
+    val context = LocalContext.current
+    val database = FirebaseDatabase.getInstance("https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/").reference
+    val caretakerUid = FirebaseAuth.getInstance().currentUser?.uid
+
+    // 🟢 Real-time Steps Sync Listener
+    // ── 🟢 1. STARTUP MEMORY CHECK ──
+    // Runs only once when the app opens to see if they are already paired
+    LaunchedEffect(Unit) {
+        val caretakerUid = FirebaseAuth.getInstance().currentUser?.uid
+        if (caretakerUid != null) {
+            database.child("users").child(caretakerUid).child("pairedElderlyUid")
+                .addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        if (snapshot.exists()) {
+                            isLinked = true // Skip the QR scanner!
+                        }
+                        isCheckingStatus = false // Stop the loading spinner
+                    }
+                    override fun onCancelled(error: DatabaseError) {
+                        isCheckingStatus = false
+                    }
+                })
+        } else {
+            isCheckingStatus = false
+        }
+    }
+
+    // ── 🟢 2. LIVE DATA SYNC ──
+    // Runs automatically whenever 'isLinked' becomes true (either from startup or scanning)
+    // ── 🟢 2. LIVE DATA SYNC ──
+    LaunchedEffect(isLinked) {
+        if (isLinked) {
+            val caretakerUid = FirebaseAuth.getInstance().currentUser?.uid
+            if (caretakerUid != null) {
+                database.child("users").child(caretakerUid).child("pairedElderlyUid")
+                    .addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snapshot: DataSnapshot) {
+                            val elderlyUid = snapshot.getValue(String::class.java)
+                            if (elderlyUid != null) {
+
+                                // Stream live steps
+                                database.child("users").child(elderlyUid).child("steps_today")
+                                    .addValueEventListener(object : ValueEventListener {
+                                        override fun onDataChange(stepSnap: DataSnapshot) {
+                                            elderlySteps = stepSnap.getValue(Int::class.java) ?: 0
+                                        }
+                                        override fun onCancelled(error: DatabaseError) {}
+                                    })
+
+                                // 🟢 NEW: Stream the live battery status from the connected elderly user!
+                                database.child("users").child(elderlyUid).child("battery_level")
+                                    .addValueEventListener(object : ValueEventListener {
+                                        override fun onDataChange(batterySnap: DataSnapshot) {
+                                            elderlyBattery = batterySnap.getValue(Int::class.java) ?: 100
+                                        }
+                                        override fun onCancelled(error: DatabaseError) {}
+                                    })
+                            }
+                        }
+                        override fun onCancelled(error: DatabaseError) {}
+                    })
+            }
+        }
+    }
+
     val transition = updateTransition(targetState = appState, label = "AppStateTransition")
 
-    // ── Animated accent color (global) ──
     val accentColor by transition.animateColor(
         transitionSpec = { ColorTween }, label = "AccentColor"
     ) { state ->
@@ -110,86 +174,105 @@ fun CaretakerDashboardScreen() {
             .fillMaxSize()
             .background(Background)
     ) {
-        if (!isLinked) {
-            // 🤝 NEST 1: Show ONLY the pairing setup layout if not verified yet
-            LinkElderlyScreen(
-                onLinkSuccess = { isLinked = true }
-            )
-        } else {
-            // 🏡 NEST 2: Everything inside this block is safely hidden until paired successfully!
+        AnimatedContent(
+            targetState = isLinked,
+            transitionSpec = {
+                val enterTransition = fadeIn(
+                    animationSpec = tween(durationMillis = 450, delayMillis = 50, easing = LinearOutSlowInEasing)
+                ) + scaleIn(
+                    initialScale = 0.95f,
+                    animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
+                )
 
-            AmbientBlob(accentColor = accentColor, transition = transition)
+                val exitTransition = fadeOut(
+                    animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                ) + scaleOut(
+                    targetScale = 0.98f,
+                    animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                )
 
-            // ── SMOOTH SCREEN TRANSITION ROUTER ──
-            AnimatedContent(
-                targetState = showEditProfile,
-                transitionSpec = {
-                    if (targetState) {
-                        (slideInHorizontally { it } + fadeIn(tween(300))) togetherWith
-                                (slideOutHorizontally { -it / 3 } + fadeOut(tween(300)))
-                    } else {
-                        (slideInHorizontally { -it / 3 } + fadeIn(tween(300))) togetherWith
-                                (slideOutHorizontally { it } + fadeOut(tween(300)))
-                    }
-                },
-                label = "ProfileTransition"
-            ) { isEditing ->
-                if (isEditing) {
-                    EditProfileScreen(onBackClick = { showEditProfile = false })
-                } else {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        AnimatedContent(targetState = currentTab, label = "TabSwitch") { tab ->
-                            when (tab) {
-                                "Home" -> CaretakerHomeScreen()
-                                "Reports" -> ReportsScreenFull()
-                                "Elder's Hub" -> PatientScreen()
-                                "Settings" -> SettingsScreen(
-                                    onNavigateToEditProfile = { showEditProfile = true },
-                                    onNavigateToPrivacySecurity = { showPrivacySecurity = true }
+                enterTransition togetherWith exitTransition
+            },
+            label = "PairingToDashboardTransition"
+        ) { linked ->
+            if (!linked) {
+                LinkElderlyScreen(
+                    onLinkSuccess = { isLinked = true }
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AmbientBlob(accentColor = accentColor, transition = transition)
+
+                    AnimatedContent(
+                        targetState = showEditProfile,
+                        transitionSpec = {
+                            if (targetState) {
+                                (slideInHorizontally { it } + fadeIn(tween(300))) togetherWith
+                                        (slideOutHorizontally { -it / 3 } + fadeOut(tween(300)))
+                            } else {
+                                (slideInHorizontally { -it / 3 } + fadeIn(tween(300))) togetherWith
+                                        (slideOutHorizontally { it } + fadeOut(tween(300)))
+                            }
+                        },
+                        label = "ProfileTransition"
+                    ) { isEditing ->
+                        if (isEditing) {
+                            EditProfileScreen(onBackClick = { showEditProfile = false })
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                AnimatedContent(targetState = currentTab, label = "TabSwitch") { tab ->
+                                    when (tab) {
+                                        // 🟢 Pass the live synced steps to the UI
+                                        "Home" -> CaretakerHomeScreen(elderlySteps = elderlySteps, elderlyBattery = elderlyBattery)
+                                        "Reports" -> ReportsScreenFull()
+                                        "Elder's Hub" -> PatientScreen()
+                                        "Settings" -> SettingsScreen(
+                                            onNavigateToEditProfile = { showEditProfile = true },
+                                            onNavigateToPrivacySecurity = { showPrivacySecurity = true }
+                                        )
+                                    }
+                                }
+
+                                TaliBottomNavHub(
+                                    currentTab = currentTab,
+                                    onTabSelected = { currentTab = it },
+                                    accentColor = accentColor,
+                                    accentGlow  = accentGlow,
+                                    appState    = appState,
+                                    onSosClick  = {
+                                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                                            data = Uri.parse("tel:999")
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    modifier    = Modifier.align(Alignment.BottomCenter)
                                 )
                             }
                         }
 
-                        // Bottom Navigation
-                        TaliBottomNavHub(
-                            currentTab = currentTab,
-                            onTabSelected = { currentTab = it },
-                            accentColor = accentColor,
-                            accentGlow  = accentGlow,
-                            appState    = appState,
-                            onSosClick  = {
-                                val intent = Intent(Intent.ACTION_DIAL).apply {
-                                    data = Uri.parse("tel:999")
-                                }
-                                context.startActivity(intent)
-                            },
-                            modifier    = Modifier.align(Alignment.BottomCenter)
-                        )
+                        AnimatedVisibility(
+                            visible = showPrivacySecurity,
+                            enter = slideInHorizontally(
+                                initialOffsetX = { fullWidth -> fullWidth },
+                                animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                            ) + fadeIn(animationSpec = tween(350)),
+                            exit = slideOutHorizontally(
+                                targetOffsetX = { fullWidth -> fullWidth },
+                                animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                            ) + fadeOut(animationSpec = tween(300))
+                        ) {
+                            PrivacySecurityScreen(onBackClick = { showPrivacySecurity = false })
+                        }
                     }
-                }
 
-                AnimatedVisibility(
-                    visible = showPrivacySecurity,
-                    enter = slideInHorizontally(
-                        initialOffsetX = { fullWidth -> fullWidth },
-                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
-                    ) + fadeIn(animationSpec = tween(350)),
-                    exit = slideOutHorizontally(
-                        targetOffsetX = { fullWidth -> fullWidth },
-                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(300))
-                ) {
-                    PrivacySecurityScreen(onBackClick = { showPrivacySecurity = false })
+                    SlidingAlertSheet(
+                        visible  = appState == ComponentState.ALERT,
+                        onDismiss = { appState = ComponentState.NORMAL },
+                        onFullScreen = { /* Handle navigation */ }
+                    )
                 }
             }
-
-            // Sliding Alert Sheet (Stays safely contained within the active dashboard view)
-            SlidingAlertSheet(
-                visible  = appState == ComponentState.ALERT,
-                onDismiss = { appState = ComponentState.NORMAL },
-                onFullScreen = { /* Handle navigation */ }
-            )
-        } // 🟢 Closes the if/else routing switch block cleanly
+        }
     }
 }
 
@@ -242,7 +325,6 @@ fun TaliTopBar(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Brand block
         Column {
             Text(
                 text       = "TaliHayat",
@@ -259,12 +341,10 @@ fun TaliTopBar(
             )
         }
 
-        // Action icons
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment     = Alignment.CenterVertically
         ) {
-            // Notification Bell
             Box(
                 modifier = Modifier
                     .size(44.dp)
@@ -280,7 +360,6 @@ fun TaliTopBar(
                         Crimson else Navy,
                     modifier = Modifier.size(22.dp)
                 )
-                // Alert dot
                 if (appState == ComponentState.ALERT) {
                     Box(
                         modifier = Modifier
@@ -292,7 +371,6 @@ fun TaliTopBar(
                 }
             }
 
-            // Toggle button (simulate fall trigger)
             Box(
                 modifier = Modifier
                     .height(36.dp)
@@ -306,7 +384,7 @@ fun TaliTopBar(
             ) {
                 Text(
                     text       = if (appState == ComponentState.NORMAL) "Simulate Fall" else "Reset",
-                    color      = Color.White,
+                    color = Color.White,
                     fontSize   = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -328,18 +406,15 @@ fun StatusOverviewCard(
     appState    : ComponentState,
     modifier    : Modifier = Modifier
 ) {
-    // Ring progress
     val ringProgress by transition.animateFloat(
         transitionSpec = { tween(900, easing = FastOutSlowInEasing) }, label = "RingProgress"
     ) { if (it == ComponentState.NORMAL) 1f else 0.72f }
 
-    // Card scale
     val cardScale by transition.animateFloat(
         transitionSpec = { spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMediumLow) },
         label = "CardScale"
     ) { if (it == ComponentState.NORMAL) 1f else 1.015f }
 
-    // Pulse animation (ALERT only)
     val infinitePulse = rememberInfiniteTransition(label = "Pulse")
     val pulseScale by infinitePulse.animateFloat(
         initialValue = 1f, targetValue = 1.08f,
@@ -365,12 +440,10 @@ fun StatusOverviewCard(
                 .padding(24.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // ── Circular Progress Ring ──
             Box(
                 contentAlignment = Alignment.Center,
                 modifier         = Modifier.size(130.dp)
             ) {
-                // Glow halo (ALERT state pulsing)
                 if (appState == ComponentState.ALERT) {
                     Box(
                         modifier = Modifier
@@ -387,13 +460,11 @@ fun StatusOverviewCard(
                     )
                 }
 
-                // Ring canvas
                 Canvas(modifier = Modifier.size(120.dp)) {
                     val strokeWidth = 12.dp.toPx()
                     val inset       = strokeWidth / 2
                     val oval        = Rect(inset, inset, size.width - inset, size.height - inset)
 
-                    // Background track
                     drawArc(
                         color       = accentColor.copy(alpha = 0.12f),
                         startAngle  = -90f,
@@ -403,7 +474,6 @@ fun StatusOverviewCard(
                         size        = oval.size,
                         style       = Stroke(strokeWidth, cap = StrokeCap.Round)
                     )
-                    // Active arc
                     drawArc(
                         color      = accentColor,
                         startAngle = -90f,
@@ -415,7 +485,6 @@ fun StatusOverviewCard(
                     )
                 }
 
-                // Center label
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = if (appState == ComponentState.NORMAL) "100%" else "⚠",
@@ -435,7 +504,6 @@ fun StatusOverviewCard(
 
             Spacer(modifier = Modifier.width(20.dp))
 
-            // ── Status Info ──
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = if (appState == ComponentState.NORMAL)
@@ -456,7 +524,6 @@ fun StatusOverviewCard(
                 )
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Status chip
                 Box(
                     modifier = Modifier
                         .background(accentLight, RoundedCornerShape(20.dp))
@@ -511,7 +578,6 @@ fun LiveMonitoringGrid(
             .graphicsLayer { alpha = cardAlpha; scaleX = cardScale; scaleY = cardScale },
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Left: AI Vision Camera
         AiCameraCard(
             accentColor = accentColor,
             accentLight = accentLight,
@@ -519,7 +585,6 @@ fun LiveMonitoringGrid(
             modifier    = Modifier.weight(1f)
         )
 
-        // Right: Activity Status
         ActivityStatusCard(
             accentColor = accentColor,
             accentLight = accentLight,
@@ -547,7 +612,6 @@ fun AiCameraCard(
 
     PremiumCard(modifier = modifier) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Header
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -572,7 +636,6 @@ fun AiCameraCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Camera preview placeholder
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -580,7 +643,6 @@ fun AiCameraCard(
                     .background(Navy.copy(alpha = 0.06f), RoundedCornerShape(12.dp))
                     .clip(RoundedCornerShape(12.dp))
             ) {
-                // Scan line
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val y = size.height * scanOffset
                     drawLine(
@@ -589,7 +651,6 @@ fun AiCameraCard(
                         end         = Offset(size.width, y),
                         strokeWidth = 2.dp.toPx()
                     )
-                    // Grid overlay
                     val cols = 3; val rows = 3
                     for (i in 1 until cols) {
                         drawLine(
@@ -607,7 +668,6 @@ fun AiCameraCard(
                             strokeWidth = 1.dp.toPx()
                         )
                     }
-                    // Person silhouette circle
                     drawCircle(
                         color  = accentColor.copy(alpha = 0.25f),
                         radius = 18.dp.toPx(),
@@ -624,7 +684,6 @@ fun AiCameraCard(
                         .align(Alignment.Center)
                 )
 
-                // ALERT overlay
                 if (appState == ComponentState.ALERT) {
                     Box(
                         modifier = Modifier
@@ -639,15 +698,13 @@ fun AiCameraCard(
                         modifier   = Modifier
                             .align(Alignment.BottomStart)
                             .padding(6.dp)
-                            .background(CrimsonLight, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .background(CrimsonLight, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Confidence chip
             Box(
                 modifier = Modifier
                     .background(accentLight, RoundedCornerShape(6.dp))
@@ -672,19 +729,16 @@ fun ActivityStatusCard(
     appState    : ComponentState,
     modifier    : Modifier = Modifier
 ) {
-    // Animated activity label swap
     val activityLabel  = if (appState == ComponentState.NORMAL) "Walking"      else "Fall Detected"
     val activityEmoji  = if (appState == ComponentState.NORMAL) "🚶"           else "🚨"
     val lastSeen       = if (appState == ComponentState.NORMAL) "Just now"     else "Unresponsive"
     val lastSeenColor  = if (appState == ComponentState.NORMAL) Teal else Crimson
 
-    // Hour-sparkline bar heights (simulated activity pattern)
     val barHeights = if (appState == ComponentState.NORMAL)
         listOf(0.3f, 0.5f, 0.4f, 0.8f, 0.6f, 0.9f, 0.7f, 0.5f)
     else
         listOf(0.9f, 0.95f, 1.0f, 0.2f, 0.05f, 0.0f, 0.0f, 0.0f)
 
-    // Pulse dot animation
     val pulseInfinite = rememberInfiniteTransition(label = "ActivityPulse")
     val pulseAlpha by pulseInfinite.animateFloat(
         initialValue = 0.3f, targetValue = 1f,
@@ -697,7 +751,6 @@ fun ActivityStatusCard(
     PremiumCard(modifier = modifier) {
         Column(modifier = Modifier.padding(16.dp)) {
 
-            // ── Header ──
             Row(
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -709,7 +762,6 @@ fun ActivityStatusCard(
                     fontWeight = FontWeight.Bold,
                     color      = Navy
                 )
-                // Live pulse dot
                 Box(
                     modifier = Modifier
                         .size(7.dp)
@@ -722,7 +774,6 @@ fun ActivityStatusCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ── Activity Badge ──
             AnimatedContent(
                 targetState  = activityLabel,
                 transitionSpec = {
@@ -761,7 +812,6 @@ fun ActivityStatusCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ── Hourly Activity Sparkline ──
             Text(
                 text     = "Last 8 hrs",
                 fontSize = 10.sp,
@@ -865,8 +915,6 @@ fun TaliBottomNavHub(
     onSosClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // ANIMATIONS REMOVED to make the button static
-
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -889,18 +937,15 @@ fun TaliBottomNavHub(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            // Left nav items
             NavItem(Icons.Filled.Home, "Home", currentTab == "Home", accentColor) { onTabSelected("Home") }
             NavItem(Icons.Filled.Analytics, "Reports", currentTab == "Reports", accentColor) { onTabSelected("Reports") }
 
-            // SOS FAB (center) - STATIC & RED
             Box(contentAlignment = Alignment.Center) {
                 Box(
                     modifier = Modifier
                         .size(58.dp)
                         .background(
                             brush = Brush.radialGradient(
-                                // Forced to Crimson (Red) instead of changing with accentColor
                                 listOf(Crimson, Crimson.copy(alpha = 0.8f))
                             ),
                             shape = CircleShape
@@ -912,7 +957,6 @@ fun TaliBottomNavHub(
                 }
             }
 
-            // Right nav items
             NavItem(Icons.Filled.Person, "Elder's Hub", currentTab == "Elder's Hub", accentColor) { onTabSelected("Elder's Hub") }
             NavItem(Icons.Filled.Settings, "Settings", currentTab == "Settings", accentColor) { onTabSelected("Settings") }
         }
@@ -989,7 +1033,6 @@ fun SlidingAlertSheet(
                     )
                     .padding(horizontal = 24.dp, vertical = 28.dp)
             ) {
-                // Handle
                 Box(
                     modifier = Modifier
                         .width(40.dp)
@@ -1000,7 +1043,6 @@ fun SlidingAlertSheet(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Alert icon + title
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1036,7 +1078,6 @@ fun SlidingAlertSheet(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Details card
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1052,7 +1093,6 @@ fun SlidingAlertSheet(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Primary CTA — Full Screen Camera
                 Button(
                     onClick  = onFullScreen,
                     modifier = Modifier
@@ -1081,7 +1121,6 @@ fun SlidingAlertSheet(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Secondary CTA — Cancel
                 OutlinedButton(
                     onClick  = onDismiss,
                     modifier = Modifier

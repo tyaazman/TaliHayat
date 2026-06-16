@@ -52,6 +52,7 @@ dependencies {
     // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.database)
+    implementation("com.google.firebase:firebase-auth-ktx")
 
     // Compose
     implementation(platform(libs.compose.bom))
@@ -71,6 +72,16 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.constraintlayout)
     implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("com.google.zxing:core:3.5.3")
+
+    // CameraX Core Libraries
+    implementation("androidx.camera:camera-core:1.3.1")
+    implementation("androidx.camera:camera-camera2:1.3.1")
+    implementation("androidx.camera:camera-lifecycle:1.3.1")
+    implementation("androidx.camera:camera-view:1.3.1")
+
+// Google ML Kit Barcode Scanning
+    implementation("com.google.mlkit:barcode-scanning:17.2.0")
 
 
     testImplementation(libs.junit)
