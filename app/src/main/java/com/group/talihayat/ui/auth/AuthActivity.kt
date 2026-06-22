@@ -36,6 +36,12 @@ import com.group.talihayat.ui.elderly.ElderlyDashboardActivity
 import com.group.talihayat.ui.splash.TaliHayatSplashScreen
 import com.group.talihayat.ui.theme.*
 import kotlin.math.*
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.group.talihayat.ui.navigation.Routes
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 
 enum class AuthScreen { LOGIN, REGISTER }
 
@@ -76,53 +82,76 @@ class AuthActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TaliHayatTheme {
-                var showSplash by remember { mutableStateOf(true) }
-
-                AnimatedContent(
-                    targetState = showSplash,
-                    transitionSpec = { fadeIn(tween(800)) togetherWith fadeOut(tween(800)) },
-                    label = "SplashTransition"
-                ) { isSplashVisible ->
-                    if (isSplashVisible) {
-                        TaliHayatSplashScreen(onTimeout = { showSplash = false })
-                    } else {
-                        // Inside AuthActivity.kt -> onCreate -> setContent
+                val navController = rememberNavController()
+                NavHost(
+                    navController = navController,
+                    startDestination = Routes.Splash
+                ) {
+                    composable(Routes.Splash) {
+                        TaliHayatSplashScreen(navController = navController)
+                    }
+                    composable(Routes.Login) {
                         TaliHayatAuthHost(
                             onAuthSuccess = { uid ->
                                 val database = FirebaseDatabase.getInstance(
                                     "https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/"
                                 ).reference
+                                val prefs = getSharedPreferences("TaliHayat_Prefs", Context.MODE_PRIVATE)
 
                                 database.child("users").child(uid).addListenerForSingleValueEvent(object : ValueEventListener {
                                     override fun onDataChange(snapshot: DataSnapshot) {
-                                        // 1. Grab the role string exactly as it is saved in Firebase
                                         val roleFromDb = snapshot.child("role").getValue(String::class.java) ?: "Caretaker"
                                         val name = snapshot.child("name").getValue(String::class.java) ?: "User"
 
-                                        // 2. Perform a strict, case-insensitive check
-                                        val destination = if (roleFromDb.trim().equals("Elderly", ignoreCase = true)) {
-                                            // 🟢 This guarantees the Elderly user gets the Elderly layout!
-                                            com.group.talihayat.ui.elderly.ElderlyDashboardActivity::class.java
+                                        prefs.edit()
+                                            .putString("user_role", roleFromDb)
+                                            .putString("saved_user_name", name)
+                                            .apply()
+
+                                        val route = if (roleFromDb.trim().equals("Elderly", ignoreCase = true)) {
+                                            val serviceIntent = Intent(this@AuthActivity, com.group.talihayat.service.FallDetectionService::class.java)
+                                            startForegroundService(serviceIntent)
+                                            Routes.ElderlyDashboard
                                         } else {
-                                            // 🟢 Caregivers get the Caretaker layout
-                                            com.group.talihayat.ui.caretaker.CaretakerDashboardActivity::class.java
+                                            val serviceIntent = Intent(this@AuthActivity, com.group.talihayat.service.FallDetectionService::class.java)
+                                            stopService(serviceIntent)
+                                            Routes.CaretakerDashboard
                                         }
 
-                                        val intent = Intent(this@AuthActivity, destination)
-                                        intent.putExtra("USER_NAME", name)
-
-                                        // Clear the back stack so they can't accidentally press 'back' to return to the login screen
-                                        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-
-                                        startActivity(intent)
-                                        finish()
+                                        navController.navigate(route) {
+                                            popUpTo(Routes.Login) { inclusive = true }
+                                        }
                                     }
-                                    override fun onCancelled(error: DatabaseError) {
-                                        // Handle error
-                                    }
+                                    override fun onCancelled(error: DatabaseError) {}
                                 })
                             }
                         )
+                    }
+                    composable(Routes.CaretakerDashboard) {
+                        val context = LocalContext.current
+                        val prefs = context.getSharedPreferences("TaliHayat_Prefs", Context.MODE_PRIVATE)
+                        val name = prefs.getString("saved_user_name", "User")
+                        LaunchedEffect(Unit) {
+                            val intent = Intent(context, CaretakerDashboardActivity::class.java).apply {
+                                putExtra("USER_NAME", name)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                            }
+                            context.startActivity(intent)
+                            (context as? android.app.Activity)?.finish()
+                        }
+                    }
+                    composable(Routes.ElderlyDashboard) {
+                        val context = LocalContext.current
+                        val prefs = context.getSharedPreferences("TaliHayat_Prefs", Context.MODE_PRIVATE)
+                        val name = prefs.getString("saved_user_name", "User")
+                        LaunchedEffect(Unit) {
+                            val intent = Intent(context, ElderlyDashboardActivity::class.java).apply {
+                                putExtra("USER_NAME", name)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                            }
+                            context.startActivity(intent)
+                            (context as? android.app.Activity)?.finish()
+                        }
                     }
                 }
             }

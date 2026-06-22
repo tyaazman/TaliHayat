@@ -4,6 +4,8 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -31,8 +33,124 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import com.group.talihayat.ui.theme.*
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
+import com.google.firebase.auth.FirebaseAuth
+import java.text.SimpleDateFormat
+import java.util.Locale
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.nativeCanvas
+
+data class Medicine(
+    val id: Int = 0,
+    val name: String = "",
+    val dosage: String = "",
+    val type: String = "Pill",
+    val isPrn: Boolean = false,
+    val slot: String = "",
+    val startDate: String = "",
+    val endDate: String = ""
+)
+
+data class ConnectedCaregiver(
+    val uid: String = "",
+    val name: String = "",
+    val phone: String = ""
+)
+
+data class ActivityIncident(
+    val title: String,
+    val subtitle: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val iconColor: androidx.compose.ui.graphics.Color,
+    val iconBg: androidx.compose.ui.graphics.Color,
+    val category: String // "Alert", "Medical", "Info"
+)
+
+data class ReportPoint(
+    val label: String,
+    val stepsVal: Float,
+    val actualSteps: Int,
+    val falls: Int,
+    val activeHours: Float,
+    val restHours: Float,
+    val dateKey: String = ""
+)
+
+fun generateDummyData(rangeType: String, count: Int = 7): List<ReportPoint> {
+    return when (rangeType) {
+        "Weekly" -> {
+            val labels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+            labels.mapIndexed { idx, label ->
+                val stepsVal = 0.2f + kotlin.random.Random.nextFloat() * 0.7f
+                val falls = if (idx == 2 || idx == 6) 1 else 0
+                val active = 4.0f + kotlin.random.Random.nextFloat() * 8.0f
+                ReportPoint(
+                    label = label,
+                    stepsVal = stepsVal,
+                    actualSteps = (stepsVal * 10000).toInt(),
+                    falls = falls,
+                    activeHours = active,
+                    restHours = 24f - active
+                )
+            }
+        }
+        "Monthly" -> {
+            val labels = (1..30).map { "$it" }
+            labels.map { label ->
+                val stepsVal = 0.3f + kotlin.random.Random.nextFloat() * 0.5f
+                val falls = if (kotlin.random.Random.nextFloat() > 0.95f) 1 else 0
+                val active = 5.0f + kotlin.random.Random.nextFloat() * 6.0f
+                ReportPoint(
+                    label = label,
+                    stepsVal = stepsVal,
+                    actualSteps = (stepsVal * 10000).toInt(),
+                    falls = falls,
+                    activeHours = active,
+                    restHours = 24f - active
+                )
+            }
+        }
+        "Yearly" -> {
+            val labels = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+            labels.map { label ->
+                val stepsVal = 0.4f + kotlin.random.Random.nextFloat() * 0.4f
+                val falls = if (kotlin.random.Random.nextFloat() > 0.85f) 1 else 0
+                val active = 6.0f + kotlin.random.Random.nextFloat() * 5.0f
+                ReportPoint(
+                    label = label,
+                    stepsVal = stepsVal,
+                    actualSteps = (stepsVal * 10000).toInt(),
+                    falls = falls,
+                    activeHours = active,
+                    restHours = 24f - active
+                )
+            }
+        }
+        "Custom" -> {
+            val labels = (1..count).map { "D$it" }
+            labels.map { label ->
+                val stepsVal = 0.2f + kotlin.random.Random.nextFloat() * 0.7f
+                val falls = if (kotlin.random.Random.nextFloat() > 0.8f) 1 else 0
+                val active = 4.0f + kotlin.random.Random.nextFloat() * 8.0f
+                ReportPoint(
+                    label = label,
+                    stepsVal = stepsVal,
+                    actualSteps = (stepsVal * 10000).toInt(),
+                    falls = falls,
+                    activeHours = active,
+                    restHours = 24f - active
+                )
+            }
+        }
+        else -> emptyList()
+    }
+}
 
 // ─────────────────────────────────────────────────
 //  SHARED CARD COMPONENT
@@ -195,9 +313,7 @@ fun ReportsScreen() {
 
                 // Bar chart canvas
                 WeeklyBarChart(
-                    days   = days,
-                    steps  = steps,
-                    falls  = falls,
+                    points = generateDummyData("Weekly"),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(140.dp)
@@ -275,107 +391,318 @@ private fun SummaryTile(
 // ── Legend dot ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun LegendDot(color: Color, label: String) {
+private fun LegendDot(color: Color, label: String, isDashed: Boolean = false) {
     Row(
         verticalAlignment     = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .background(color, CircleShape)
-        )
+        if (isDashed) {
+            Canvas(modifier = Modifier.size(width = 16.dp, height = 8.dp)) {
+                drawLine(
+                    color = color,
+                    start = Offset(0f, size.height / 2f),
+                    end = Offset(size.width, size.height / 2f),
+                    strokeWidth = 2.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(color, CircleShape)
+            )
+        }
         Text(text = label, fontSize = 10.sp, color = TaliColors.GrayMuted)
     }
 }
 
-// ── Weekly bar chart (Canvas) ─────────────────────────────────────────────────
+// ── Weekly chart labels & charts (Canvas) ──────────────────────────────────────
+
+@Composable
+private fun YAxisLabels(
+    labels: List<String>,
+    values: List<Float>,
+    bottomPadding: Dp = 24.dp,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val bottomPaddingPx = bottomPadding.toPx()
+        val chartBottom = size.height - bottomPaddingPx
+        val maxBarH = chartBottom * 0.75f
+        val textPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.GRAY
+            textSize = 9.sp.toPx()
+            textAlign = android.graphics.Paint.Align.RIGHT
+            isAntiAlias = true
+        }
+
+        labels.indices.forEach { i ->
+            val v = values[i]
+            val y = chartBottom - (maxBarH * v)
+            val baselineY = y + (textPaint.textSize / 3f)
+            drawContext.canvas.nativeCanvas.drawText(
+                labels[i],
+                size.width - 4.dp.toPx(),
+                baselineY,
+                textPaint
+            )
+        }
+    }
+}
 
 @Composable
 private fun WeeklyBarChart(
-    days     : List<String>,
-    steps    : List<Float>,
-    falls    : List<Int>,
+    points   : List<ReportPoint>,
+    isYearly : Boolean = false,
     modifier : Modifier = Modifier
 ) {
-    // Animate bars growing up from zero on first composition
-    val animProgress = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
+    val animProgress = remember(points) { Animatable(0f) }
+    LaunchedEffect(points) {
         animProgress.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
     }
 
-    Column(modifier = modifier) {
-        Canvas(
+    val bottomPadding = if (points.size > 8) 36.dp else 20.dp
+
+    Row(modifier = modifier) {
+        YAxisLabels(
+            labels = listOf("10k", "5k", "0"),
+            values = listOf(1.0f, 0.5f, 0.0f),
+            bottomPadding = bottomPadding,
+            modifier = Modifier.width(36.dp).fillMaxHeight()
+        )
+
+        val minBarWidth = 40.dp
+        val chartWidth = minBarWidth * points.size
+
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
                 .weight(1f)
+                .fillMaxHeight()
+                .horizontalScroll(rememberScrollState())
         ) {
-            val barCount   = days.size
-            val totalWidth = size.width
-            val barWidth   = (totalWidth / barCount) * 0.45f
-            val gap        = (totalWidth / barCount) * 0.55f
-            val maxBarH    = size.height * 0.85f
+            Canvas(
+                modifier = Modifier
+                    .width(chartWidth)
+                    .fillMaxHeight()
+            ) {
+                val bottomPaddingPx = bottomPadding.toPx()
+                val chartBottom = size.height - bottomPaddingPx
+                val barCount   = points.size
+                val totalWidth = size.width
+                val barWidth   = (totalWidth / barCount) * 0.45f
+                val gap        = (totalWidth / barCount) * 0.55f
+                val maxBarH    = chartBottom * 0.75f
 
-            days.indices.forEach { i ->
-                val barH     = maxBarH * steps[i] * animProgress.value
-                val x        = i * (barWidth + gap) + gap / 2
-                val barTop   = size.height - barH
-                val hasFall  = falls[i] > 0
+                points.indices.forEach { i ->
+                    val point    = points[i]
+                    val barH     = maxBarH * point.stepsVal * animProgress.value
+                    val x        = i * (barWidth + gap) + gap / 2
+                    val barTop   = chartBottom - barH
+                    val hasFall  = point.falls > 0
 
-                // Shadow
-                drawRoundRect(
-                    color     = Color.Black.copy(alpha = 0.05f),
-                    topLeft   = Offset(x + 2f, barTop + 4f),
-                    size      = Size(barWidth, barH),
-                    cornerRadius = CornerRadius(6.dp.toPx())
-                )
+                    // Shadow
+                    drawRoundRect(
+                        color     = Color.Black.copy(alpha = 0.05f),
+                        topLeft   = Offset(x + 2f, barTop + 4f),
+                        size      = Size(barWidth, barH),
+                        cornerRadius = CornerRadius(6.dp.toPx())
+                    )
 
-                // Bar fill — gradient
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors     = if (hasFall)
-                            listOf(
-                                TaliColors.CrimsonAlert,
-                                TaliColors.CrimsonAlert.copy(alpha = 0.65f)
-                            )
-                        else listOf(
-                            TaliColors.TealSafe,
-                            TaliColors.TealSafe.copy(alpha = 0.55f)
+                    // Bar fill — always TealSafe (Primary Activity Color)
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors     = listOf(
+                                TaliColors.TealSafe,
+                                TaliColors.TealSafe.copy(alpha = 0.55f)
+                            ),
+                            startY = barTop,
+                            endY   = chartBottom
                         ),
-                        startY = barTop,
-                        endY   = size.height
-                    ),
-                    topLeft      = Offset(x, barTop),
-                    size         = Size(barWidth, barH),
-                    cornerRadius = CornerRadius(6.dp.toPx())
-                )
+                        topLeft      = Offset(x, barTop),
+                        size         = Size(barWidth, barH),
+                        cornerRadius = CornerRadius(6.dp.toPx())
+                    )
 
-                // Fall indicator dot on top of bar
-                if (hasFall) {
-                    drawCircle(
-                        color  = TaliColors.CrimsonAlert,
-                        radius = 5.dp.toPx(),
-                        center = Offset(x + barWidth / 2f, barTop - 8.dp.toPx())
+                    // Exclamation badge overlay if fall event occurred
+                    if (hasFall) {
+                        val badgeText = if (isYearly) point.falls.toString() else "!"
+                        val dotCenter = Offset(x + barWidth / 2f, barTop - 10.dp.toPx())
+                        val badgeRadius = if (isYearly) 8.dp.toPx() else 6.dp.toPx()
+                        drawCircle(
+                            color  = TaliColors.CrimsonAlert,
+                            radius = badgeRadius,
+                            center = dotCenter
+                        )
+
+                        val textPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.WHITE
+                            textSize = if (isYearly) 9.sp.toPx() else 10.sp.toPx()
+                            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+                            textAlign = android.graphics.Paint.Align.CENTER
+                            isAntiAlias = true
+                        }
+                        drawContext.canvas.nativeCanvas.drawText(
+                            badgeText,
+                            dotCenter.x,
+                            dotCenter.y + (textPaint.textSize / 3f),
+                            textPaint
+                        )
+                    }
+
+                    // Draw X-axis label
+                    val textPaint = android.graphics.Paint().apply {
+                        color = if (point.falls > 0) {
+                            android.graphics.Color.parseColor("#E53935") // CrimsonAlert
+                        } else {
+                            android.graphics.Color.GRAY
+                        }
+                        textSize = 10.sp.toPx()
+                        typeface = android.graphics.Typeface.create(
+                            android.graphics.Typeface.DEFAULT,
+                            if (point.falls > 0) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL
+                        )
+                        isAntiAlias = true
+                        textAlign = android.graphics.Paint.Align.CENTER
+                    }
+
+                    val labelX = x + barWidth / 2f
+                    val labelY = chartBottom + 14.dp.toPx()
+                    drawContext.canvas.nativeCanvas.drawText(point.label, labelX, labelY, textPaint)
+                }
+
+                // Dashed horizontal line representing average steps
+                if (points.isNotEmpty()) {
+                    val average = points.map { it.stepsVal }.average().toFloat()
+                    val avgY = chartBottom - (maxBarH * average * animProgress.value)
+                    drawLine(
+                        color = TaliColors.Navy.copy(alpha = 0.3f),
+                        start = Offset(0f, avgY),
+                        end = Offset(size.width, avgY),
+                        strokeWidth = 1.5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
                     )
                 }
             }
         }
+    }
+}
 
-        // Day labels row
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier              = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceAround
+@Composable
+private fun WeeklyStackedBarChart(
+    points   : List<ReportPoint>,
+    showInnerLabels : Boolean = true,
+    modifier : Modifier = Modifier
+) {
+    val animProgress = remember(points) { Animatable(0f) }
+    LaunchedEffect(points) {
+        animProgress.animateTo(1f, tween(900, easing = FastOutSlowInEasing))
+    }
+
+    val bottomPadding = if (points.size > 8) 36.dp else 20.dp
+
+    Row(modifier = modifier) {
+        YAxisLabels(
+            labels = listOf("24h", "18h", "12h", "6h", "0h"),
+            values = listOf(1.0f, 0.75f, 0.5f, 0.25f, 0.0f),
+            bottomPadding = bottomPadding,
+            modifier = Modifier.width(36.dp).fillMaxHeight()
+        )
+
+        val minBarWidth = 40.dp
+        val chartWidth = minBarWidth * points.size
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .horizontalScroll(rememberScrollState())
         ) {
-            days.forEachIndexed { i, day ->
-                Text(
-                    text      = day,
-                    fontSize  = 11.sp,
-                    color     = if (falls[i] > 0) TaliColors.CrimsonAlert else TaliColors.GrayMuted,
-                    fontWeight = if (falls[i] > 0) FontWeight.Bold else FontWeight.Normal,
-                    textAlign = TextAlign.Center,
-                    modifier  = Modifier.weight(1f)
-                )
+            Canvas(
+                modifier = Modifier
+                    .width(chartWidth)
+                    .fillMaxHeight()
+            ) {
+                val bottomPaddingPx = bottomPadding.toPx()
+                val chartBottom = size.height - bottomPaddingPx
+                val barCount   = points.size
+                val totalWidth = size.width
+                val barWidth   = (totalWidth / barCount) * 0.45f
+                val gap        = (totalWidth / barCount) * 0.55f
+                val maxBarH    = chartBottom * 0.75f
+
+                points.indices.forEach { i ->
+                    val progress = animProgress.value
+                    val point = points[i]
+
+                    val restVal = point.restHours / 24f
+                    val activeVal = point.activeHours / 24f
+
+                    val restH = maxBarH * restVal * progress
+                    val activeH = maxBarH * activeVal * progress
+
+                    val x = i * (barWidth + gap) + gap / 2
+                    val barTop = chartBottom - (restH + activeH)
+
+                    // Draw Rest segment (top) — styled lighter
+                    drawRoundRect(
+                        color = TaliColors.TealSafe.copy(alpha = 0.15f),
+                        topLeft = Offset(x, barTop),
+                        size = Size(barWidth, restH),
+                        cornerRadius = CornerRadius(6.dp.toPx())
+                    )
+
+                    // Draw Active segment (bottom) — styled TealSafe
+                    val activeTop = barTop + restH
+                    drawRoundRect(
+                        color = TaliColors.TealSafe,
+                        topLeft = Offset(x, activeTop),
+                        size = Size(barWidth, activeH),
+                        cornerRadius = CornerRadius(6.dp.toPx())
+                    )
+
+                    // Draw text hourly label inside active segment (if height permits and showInnerLabels is true)
+                    if (showInnerLabels && activeH > 16.dp.toPx()) {
+                        val activeText = "${point.activeHours.toInt()}h"
+                        val textPaint = android.graphics.Paint().apply {
+                            color = android.graphics.Color.WHITE
+                            textSize = 9.sp.toPx()
+                            textAlign = android.graphics.Paint.Align.CENTER
+                            isAntiAlias = true
+                        }
+                        drawContext.canvas.nativeCanvas.drawText(
+                            activeText,
+                            x + barWidth / 2f,
+                            activeTop + activeH / 2f + (textPaint.textSize / 3f),
+                            textPaint
+                        )
+                    }
+
+                    // Draw X-axis label
+                    val textPaint = android.graphics.Paint().apply {
+                        color = android.graphics.Color.GRAY
+                        textSize = 10.sp.toPx()
+                        isAntiAlias = true
+                        textAlign = android.graphics.Paint.Align.CENTER
+                    }
+
+                    val labelX = x + barWidth / 2f
+                    val labelY = chartBottom + 14.dp.toPx()
+                    drawContext.canvas.nativeCanvas.drawText(point.label, labelX, labelY, textPaint)
+                }
+
+                // Dashed horizontal line representing active hours average
+                if (points.isNotEmpty()) {
+                    val averageActive = points.map { it.activeHours }.average().toFloat()
+                    val avgY = chartBottom - (maxBarH * (averageActive / 24f) * animProgress.value)
+                    drawLine(
+                        color = TaliColors.Navy.copy(alpha = 0.3f),
+                        start = Offset(0f, avgY),
+                        end = Offset(size.width, avgY),
+                        strokeWidth = 1.5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                    )
+                }
             }
         }
     }
@@ -465,138 +792,240 @@ private fun IncidentItem(
 // with the properly-typed list below. The ReportsScreen is re-declared
 // as a clean, fully working version:
 
+private fun formatDateKey(dateKey: String, format: String): String {
+    return try {
+        val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(dateKey)
+        if (date != null) {
+            SimpleDateFormat(format, Locale.getDefault()).format(date)
+        } else {
+            ""
+        }
+    } catch (e: Exception) {
+        ""
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReportsScreenFull() {
+fun ReportsScreenFull(elderlyUid: String?) {
 
     val coroutineScope = rememberCoroutineScope()
     var isRefreshing by remember { mutableStateOf(false) }
+    var selectedChartView by remember { mutableStateOf("Mobility Trends") }
+    var selectedTimeRange by remember { mutableStateOf("Weekly") }
+    var showDatePicker by remember { mutableStateOf(false) }
+    var selectedMonthView by remember { mutableStateOf(5) } // 0-indexed: 5 = June
+    var selectedYearView by remember { mutableStateOf(2026) }
+    var customStartDateKey by remember { mutableStateOf<String?>(null) }
+    var customEndDateKey by remember { mutableStateOf<String?>(null) }
 
-    data class Incident(
-        val time: String, val description: String,
-        val severity: String, val date: String
-    )
+    val database = remember { FirebaseDatabase.getInstance("https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/").reference }
+    val dbPoints = remember { mutableStateListOf<ReportPoint>() }
+    var isLoading by remember { mutableStateOf(true) }
 
-    val incidents = listOf(
-        Incident("2:14 PM", "Fall Detected — Living Room",  "critical", "Today"),
-        Incident("9:05 AM", "Low Battery Warning (18%)",    "warning",  "Today"),
-        Incident("8:00 AM", "System Online — All Sensors",  "info",     "Today"),
-        Incident("7:48 PM", "Fall Detected — Bathroom",     "critical", "Yesterday"),
-        Incident("3:20 PM", "Camera Reconnected",           "info",     "Yesterday"),
-        Incident("11:30 AM","Motion: Extended Inactivity",  "warning",  "Yesterday"),
-        Incident("6:00 AM", "Daily Health Check Passed",    "info",     "2 days ago")
-    )
+    LaunchedEffect(elderlyUid) {
+        if (elderlyUid != null) {
+            isLoading = true
+            val ref = database.child("users").child(elderlyUid).child("reports")
+            ref.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    dbPoints.clear()
+                    val list = mutableListOf<ReportPoint>()
+                    for (child in snapshot.children) {
+                        val dateKey = child.key ?: continue
+                        val steps = child.child("steps").getValue(Int::class.java)
+                            ?: child.child("actualSteps").getValue(Int::class.java)
+                            ?: child.child("actual_steps").getValue(Int::class.java)
+                            ?: 0
+                        val falls = child.child("falls").getValue(Int::class.java)
+                            ?: child.child("fall_count").getValue(Int::class.java)
+                            ?: 0
+                        val active = child.child("activeHours").getValue(Float::class.java)
+                            ?: child.child("active_hours").getValue(Float::class.java)
+                            ?: 4.0f
+                        val rest = child.child("restHours").getValue(Float::class.java)
+                            ?: child.child("rest_hours").getValue(Float::class.java)
+                            ?: (24.0f - active)
 
-    val days  = listOf("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
-    val steps = listOf(0.45f, 0.72f, 0.38f, 0.88f, 0.60f, 0.30f, 0.55f)
-    val falls = listOf(0, 0, 1, 0, 0, 0, 1)
+                        val stepsVal = (steps.toFloat() / 10000f).coerceIn(0f, 1f)
 
-    // 👇 1. PLACE THE PULL TO REFRESH BOX OPENER HERE 👇
-    // ✅ Change lines 521-524 to look exactly like this:
-    PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = {
-            isRefreshing = true
-            coroutineScope.launch {
-                delay(1500)
-                isRefreshing = false
-            }
-        },
-        modifier = Modifier.fillMaxSize() // 🟢 Just the modifier here!
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(TaliColors.Background)
-                .statusBarsPadding() // 🟢 Add this line to handle the phone status bar automatically
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 100.dp)
-        ) {
-            Spacer(Modifier.height(20.dp))
-
-            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                Text("Reports", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = TaliColors.Navy)
-                Text("Week of June 2–8, 2025", fontSize = 13.sp, color = TaliColors.GrayMuted)
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Summary tiles
-            Row(
-                modifier              = Modifier.padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                SummaryTile("Falls",     "2", Icons.Filled.Warning,         TaliColors.CrimsonAlert, TaliColors.CrimsonLight, Modifier.weight(1f))
-                SummaryTile("Alerts",    "5", Icons.Filled.Notifications,   TaliColors.AmberWarning, Color(0xFFFFF8E1),       Modifier.weight(1f))
-                SummaryTile("Safe Days", "5", Icons.Filled.HealthAndSafety, TaliColors.TealSafe,     TaliColors.TealLight,    Modifier.weight(1f))
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Chart card
-            TaliCard(modifier = Modifier.padding(horizontal = 24.dp)) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Row(
-                        modifier              = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment     = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Weekly Activity", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
-                            Text("Steps & fall events", fontSize = 12.sp, color = TaliColors.GrayMuted)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            LegendDot(TaliColors.TealSafe,    "Activity")
-                            LegendDot(TaliColors.CrimsonAlert,"Fall")
-                        }
-                    }
-                    Spacer(Modifier.height(20.dp))
-                    WeeklyBarChart(days = days, steps = steps, falls = falls, modifier = Modifier.fillMaxWidth().height(140.dp))
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // Incident history
-            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                SectionHeader("Incident History")
-                TaliCard {
-                    Column {
-                        incidents.forEachIndexed { index, inc ->
-                            IncidentItem(
-                                time        = inc.time,
-                                description = inc.description,
-                                severity    = inc.severity,
-                                date        = inc.date
-                            )
-                            if (index < incidents.lastIndex) {
-                                HorizontalDivider(
-                                    color     = TaliColors.Divider,
-                                    thickness = 0.5.dp,
-                                    modifier  = Modifier.padding(horizontal = 16.dp)
-                                )
+                        val label = try {
+                            val parsedDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(dateKey)
+                            if (parsedDate != null) {
+                                SimpleDateFormat("d/M", Locale.getDefault()).format(parsedDate)
+                            } else {
+                                dateKey
                             }
+                        } catch (e: Exception) {
+                            dateKey
+                        }
+
+                        list.add(ReportPoint(label, stepsVal, steps, falls, active, rest, dateKey))
+                    }
+                    dbPoints.addAll(list)
+                    isLoading = false
+                }
+                override fun onCancelled(error: DatabaseError) {
+                    isLoading = false
+                }
+            })
+        } else {
+            dbPoints.clear()
+            isLoading = false
+        }
+    }
+
+    val currentPoints = remember(selectedTimeRange, selectedMonthView, selectedYearView, customStartDateKey, customEndDateKey, dbPoints.size) {
+        if (dbPoints.isNotEmpty()) {
+            when (selectedTimeRange) {
+                "Weekly" -> dbPoints.takeLast(7)
+                "Monthly" -> {
+                    val prefix = "$selectedYearView-${(selectedMonthView + 1).toString().padStart(2, '0')}-"
+                    dbPoints.filter { it.dateKey.startsWith(prefix) }
+                }
+                "Yearly" -> {
+                    val monthLabels = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+                    monthLabels.mapIndexed { idx, label ->
+                        val monthNum = (idx + 1).toString().padStart(2, '0')
+                        val prefix = "$selectedYearView-$monthNum-"
+                        val monthPoints = dbPoints.filter { it.dateKey.startsWith(prefix) }
+                        if (monthPoints.isNotEmpty()) {
+                            val avgActualSteps = monthPoints.map { it.actualSteps }.average().toInt()
+                            val avgStepsVal = (avgActualSteps.toFloat() / 10000f).coerceIn(0f, 1f)
+                            val totalFalls = monthPoints.sumOf { it.falls }
+                            val avgActive = monthPoints.map { it.activeHours }.average().toFloat()
+                            val avgRest = monthPoints.map { it.restHours }.average().toFloat()
+                            ReportPoint(
+                                label = label,
+                                stepsVal = avgStepsVal,
+                                actualSteps = avgActualSteps,
+                                falls = totalFalls,
+                                activeHours = avgActive,
+                                restHours = avgRest,
+                                dateKey = "$selectedYearView-$monthNum-01"
+                            )
+                        } else {
+                            ReportPoint(
+                                label = label,
+                                stepsVal = 0f,
+                                actualSteps = 0,
+                                falls = 0,
+                                activeHours = 0f,
+                                restHours = 0f,
+                                dateKey = "$selectedYearView-$monthNum-01"
+                            )
                         }
                     }
+                }
+                "Custom" -> {
+                    val start = customStartDateKey
+                    val end = customEndDateKey
+                    if (start != null && end != null) {
+                        dbPoints.filter { it.dateKey >= start && it.dateKey <= end }
+                    } else {
+                        emptyList()
+                    }
+                }
+                else -> dbPoints
+            }
+        } else {
+            emptyList()
+        }
+    }
+
+    val dateRangeHeader = remember(selectedTimeRange, currentPoints, selectedMonthView, selectedYearView, customStartDateKey, customEndDateKey) {
+        if (selectedTimeRange == "Custom") {
+            val start = customStartDateKey
+            val end = customEndDateKey
+            if (start != null && end != null) {
+                val parser = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val formatter = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+                try {
+                    val startStr = formatter.format(parser.parse(start)!!)
+                    val endStr = formatter.format(parser.parse(end)!!)
+                    "$startStr – $endStr"
+                } catch(e: Exception) {
+                    "Custom Range"
+                }
+            } else {
+                "Select Date Range"
+            }
+        } else {
+            if (currentPoints.isNotEmpty()) {
+                val firstPoint = currentPoints.first()
+                val lastPoint = currentPoints.last()
+                when (selectedTimeRange) {
+                    "Weekly" -> {
+                        val startStr = formatDateKey(firstPoint.dateKey, "MMMM d")
+                        val endStr = formatDateKey(lastPoint.dateKey, "MMMM d, yyyy")
+                        if (startStr.isNotEmpty() && endStr.isNotEmpty()) {
+                            "Week of $startStr – $endStr"
+                        } else {
+                            "Week of June 11 – June 17, 2026"
+                        }
+                    }
+                    "Monthly" -> {
+                        val monthNames = listOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+                        val monthName = monthNames.getOrNull(selectedMonthView) ?: "June"
+                        "Month of $monthName $selectedYearView"
+                    }
+                    "Yearly" -> {
+                        "Year of $selectedYearView"
+                    }
+                    else -> "Week of June 11 – June 17, 2026"
+                }
+            } else {
+                when (selectedTimeRange) {
+                    "Weekly" -> "Week of June 11 – June 17, 2026"
+                    "Monthly" -> {
+                        val monthNames = listOf("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+                        val monthName = monthNames.getOrNull(selectedMonthView) ?: "June"
+                        "Month of $monthName $selectedYearView"
+                    }
+                    "Yearly" -> "Year of $selectedYearView"
+                    else -> "Week of June 11 – June 17, 2026"
                 }
             }
         }
-    } // 👈 2. ADD THIS CLOSING BRACE AT THE VERY END OF THE FUNCTION
-}
+    }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  2. PATIENT SCREEN
-// ═══════════════════════════════════════════════════════════════════════════════
+    data class Incident(
+        val time: String, val description: String,
+        val severity: String, val date: String,
+        val type: String
+    )
 
-@OptIn(ExperimentalMaterial3Api::class) // 👈 ADD THIS OPT-IN LINE ABOVE THE FUNCTION
-@Composable
-fun PatientScreen() {
-    // 👇 1. INITIALIZE THE REFRESH STATES AT THE TOP 👇
-    val coroutineScope = rememberCoroutineScope()
-    var isRefreshing by remember { mutableStateOf(false) }
+    val incidents = listOf(
+        Incident("2:14 PM", "Fall Detected — Living Room", "critical", "Today", "mobility"),
+        Incident("4:30 PM", "Step Goal Achieved — 8,000 steps", "info", "Today", "mobility"),
+        Incident("11:30 AM", "Unusual inactivity: 2 hours in Kitchen", "warning", "Today", "behavioral"),
+        Incident("8:00 AM", "Daily Check-In: Active & Responsive", "info", "Today", "behavioral"),
+        Incident("6:58 AM", "Rest period ended: 7.5 hrs sleep", "info", "Today", "behavioral"),
+        Incident("7:48 PM", "Fall Detected — Bathroom", "critical", "Yesterday", "mobility"),
+        Incident("10:15 AM", "SOS Alert: Panic Button Pressed", "critical", "Yesterday", "mobility"),
+        Incident("11:30 AM", "Motion: Extended Inactivity (Living Room)", "warning", "Yesterday", "behavioral"),
+        Incident("6:00 AM", "Daily Health Check Passed", "info", "Yesterday", "behavioral"),
+        Incident("12:00 PM", "Mobility Alert: Gait deviation detected", "warning", "2 days ago", "mobility"),
+        Incident("7:15 AM", "Rest period ended: 8.2 hrs sleep", "info", "2 days ago", "behavioral")
+    )
 
-    // 👇 2. PLACE THE PULL TO REFRESH BOX OPENER HERE 👇
-    // ✅ Update the container to only use the modifier:
+    val filteredIncidents = remember(selectedChartView, dbPoints.size) {
+        if (dbPoints.isEmpty()) {
+            emptyList()
+        } else {
+            if (selectedChartView == "Mobility Trends") {
+                incidents.filter { it.type == "mobility" }
+            } else {
+                incidents.filter { it.type == "behavioral" }
+            }
+        }
+    }
+    val headerTitle = if (selectedChartView == "Mobility Trends") "Mobility & Safety Events" else "Behavioral Insights"
+
+    val totalFalls = currentPoints.sumOf { it.falls }
+    val safeDays = if (dbPoints.isEmpty()) 0 else currentPoints.count { it.falls == 0 }
+    val alertsCount = totalFalls + currentPoints.count { it.stepsVal < 0.3f }
+
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = {
@@ -608,177 +1037,1222 @@ fun PatientScreen() {
         },
         modifier = Modifier.fillMaxSize()
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(TaliColors.Background)
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 100.dp)
-        ) {
-            // ── Gradient hero header ─────────────────────────────────────────────
+        if (isLoading) {
             Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = TaliColors.TealSafe)
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(TaliColors.Background)
+                    .statusBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 100.dp)
+            ) {
+            Spacer(Modifier.height(20.dp))
+
+            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                Text("Reports", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = TaliColors.Navy)
+                Text(dateRangeHeader, fontSize = 13.sp, color = TaliColors.GrayMuted)
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Horizontally scrollable row of FilterChips
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        brush = Brush.verticalGradient(
-                            listOf(TaliColors.Navy, TaliColors.Navy.copy(alpha = 0.85f))
-                        )
-                    )
-                    .padding(top = 48.dp, bottom = 32.dp)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Subtle ambient blob
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawCircle(
-                        color  = TaliColors.TealSafe.copy(alpha = 0.12f),
-                        radius = size.width * 0.55f,
-                        center = Offset(size.width * 0.85f, 0f)
+                val ranges = listOf("Weekly", "Monthly", "Yearly", "Custom")
+                ranges.forEach { range ->
+                    val isSelected = selectedTimeRange == range
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = {
+                            if (range == "Custom") {
+                                showDatePicker = true
+                            } else {
+                                selectedTimeRange = range
+                            }
+                        },
+                        label = { Text(range) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = TaliColors.TealSafe,
+                            selectedLabelColor = Color.White,
+                            labelColor = TaliColors.Navy
+                        ),
+                        shape = RoundedCornerShape(16.dp)
                     )
                 }
+            }
 
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier            = Modifier
+            if (selectedTimeRange == "Monthly" || selectedTimeRange == "Yearly") {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
+                        .padding(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Avatar
-                    Box(contentAlignment = Alignment.BottomEnd) {
-                        Box(
-                            modifier = Modifier
-                                .size(88.dp)
-                                .background(TaliColors.TealLight, CircleShape)
-                                .border(3.dp, TaliColors.TealSafe.copy(alpha = 0.5f), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("👴", fontSize = 40.sp)
-                        }
-                        // Status dot
-                        Box(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .background(TaliColors.GreenOnline, CircleShape)
-                                .border(2.dp, TaliColors.Navy, CircleShape)
+                    val isDecrementEnabled = if (selectedTimeRange == "Monthly") {
+                        !(selectedYearView == 2025 && selectedMonthView == 0)
+                    } else {
+                        selectedYearView == 2026
+                    }
+
+                    val isIncrementEnabled = if (selectedTimeRange == "Monthly") {
+                        !(selectedYearView == 2026 && selectedMonthView == 11)
+                    } else {
+                        selectedYearView == 2025
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (selectedTimeRange == "Monthly") {
+                                if (selectedMonthView > 0) {
+                                    selectedMonthView -= 1
+                                } else if (selectedYearView == 2026) {
+                                    selectedMonthView = 11
+                                    selectedYearView = 2025
+                                }
+                            } else {
+                                if (selectedYearView == 2026) {
+                                    selectedYearView = 2025
+                                }
+                            }
+                        },
+                        enabled = isDecrementEnabled
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronLeft,
+                            contentDescription = "Previous",
+                            tint = if (isDecrementEnabled) TaliColors.Navy else TaliColors.GrayMuted
                         )
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    val displayText = if (selectedTimeRange == "Monthly") {
+                        val monthNames = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+                        "${monthNames[selectedMonthView]} $selectedYearView"
+                    } else {
+                        "$selectedYearView"
+                    }
 
                     Text(
-                        text       = "Dato' Ahmad Razali",
-                        fontSize   = 22.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color      = Color.White
-                    )
-                    Text(
-                        text     = "82 years old  ·  Male",
-                        fontSize = 13.sp,
-                        color    = Color.White.copy(alpha = 0.65f)
+                        text = displayText,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TaliColors.Navy,
+                        modifier = Modifier.padding(horizontal = 16.dp)
                     )
 
-                    Spacer(Modifier.height(16.dp))
-
-                    // Status tags
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PatientTag(label = "🛡 Sensor Armed", color = TaliColors.TealSafe)
-                        PatientTag(label = "🔋 Battery 85%",  color = TaliColors.GreenOnline)
-                        PatientTag(label = "📡 Online",        color = Color(0xFF5B6EF5))
+                    IconButton(
+                        onClick = {
+                            if (selectedTimeRange == "Monthly") {
+                                if (selectedMonthView < 11) {
+                                    selectedMonthView += 1
+                                } else if (selectedYearView == 2025) {
+                                    selectedMonthView = 0
+                                    selectedYearView = 2026
+                                }
+                            } else {
+                                if (selectedYearView == 2025) {
+                                    selectedYearView = 2026
+                                }
+                            }
+                        },
+                        enabled = isIncrementEnabled
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronRight,
+                            contentDescription = "Next",
+                            tint = if (isIncrementEnabled) TaliColors.Navy else TaliColors.GrayMuted
+                        )
                     }
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
 
-            // ── Live metrics row ─────────────────────────────────────────────────
+            // Summary tiles (Dynamic counts based on active dataset)
             Row(
                 modifier              = Modifier.padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                MetricTile("72",        "BPM",         "Heart Rate", TaliColors.CrimsonAlert, Modifier.weight(1f))
-                MetricTile("98.2°F",    "",             "Temperature", TaliColors.AmberWarning, Modifier.weight(1f))
-                MetricTile("0",         "Falls",        "Today",      TaliColors.TealSafe,     Modifier.weight(1f))
+                SummaryTile("Falls",     totalFalls.toString(), Icons.Filled.Warning,         TaliColors.CrimsonAlert, TaliColors.CrimsonLight, Modifier.weight(1f))
+                SummaryTile("Alerts",    alertsCount.toString(), Icons.Filled.Notifications,   TaliColors.AmberWarning, Color(0xFFFFF8E1),       Modifier.weight(1f))
+                SummaryTile("Safe Days", safeDays.toString(), Icons.Filled.HealthAndSafety, TaliColors.TealSafe,     TaliColors.TealLight,    Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(24.dp))
 
-            // ── Emergency Contacts ───────────────────────────────────────────────
-            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                SectionHeader("Emergency Contacts")
-                TaliCard {
-                    Column {
-                        val contacts = listOf(
-                            Triple("Siti Nurhaliza",    "Primary Caregiver",   "+60 12-345 6789"),
-                            Triple("Dr. Hafiz Rahman",  "Physician",           "+60 3-2691 0000"),
-                            Triple("Ahmad Jr.",          "Son (Next of Kin)",   "+60 11-234 5678")
+            if (dbPoints.isEmpty()) {
+                // Premium empty state layout
+                TaliCard(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 40.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.HealthAndSafety,
+                            contentDescription = "No Activity Reports",
+                            tint = TaliColors.GrayMuted,
+                            modifier = Modifier.size(64.dp)
                         )
-                        contacts.forEachIndexed { i, (name, role, phone) ->
-                            ContactRow(name = name, role = role, phone = phone)
-                            if (i < contacts.lastIndex) {
-                                HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp,
-                                    modifier = Modifier.padding(horizontal = 16.dp))
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            text = "No Activity Reports Yet",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TaliColors.Navy
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "Once the elderly device begins logging steps and activity, daily reports will automatically appear here.",
+                            fontSize = 13.sp,
+                            color = TaliColors.GrayMuted,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
+            } else {
+                // Segmented Chart Toggle Row
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp)
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .background(TaliColors.Navy.copy(alpha = 0.05f), RoundedCornerShape(24.dp))
+                        .padding(4.dp)
+                ) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        listOf("Mobility Trends", "Rest vs. Active").forEach { view ->
+                            val isSelected = selectedChartView == view
+                            val bgSelectedColor = if (isSelected) TaliColors.TealSafe else Color.Transparent
+                            val textColor = if (isSelected) Color.White else TaliColors.Navy.copy(alpha = 0.7f)
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(bgSelectedColor, RoundedCornerShape(20.dp))
+                                    .clickable { selectedChartView = view }
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = view,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = textColor,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // Chart card with AnimatedContent transition
+                TaliCard(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        AnimatedContent(
+                            targetState = selectedChartView,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
+                            },
+                            label = "ChartCardTransition"
+                        ) { viewState ->
+                            Column {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = if (viewState == "Mobility Trends") {
+                                            when (selectedTimeRange) {
+                                                "Weekly" -> "Weekly Activity"
+                                                "Monthly" -> "Monthly Activity"
+                                                "Yearly" -> "Yearly Activity"
+                                                "Custom" -> "Custom Activity"
+                                                else -> "Weekly Activity"
+                                            }
+                                        } else {
+                                            "Daily Rest vs. Active"
+                                        },
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TaliColors.Navy
+                                    )
+                                    Text(
+                                        text = if (viewState == "Mobility Trends") "Steps & fall events" else "Activity distribution",
+                                        fontSize = 12.sp,
+                                        color = TaliColors.GrayMuted
+                                    )
+                                    Spacer(Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Start,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (viewState == "Mobility Trends") {
+                                            LegendDot(color = TaliColors.TealSafe, label = "Steps")
+                                            Spacer(Modifier.width(16.dp))
+                                            LegendDot(color = TaliColors.CrimsonAlert, label = "Fall")
+                                            Spacer(Modifier.width(16.dp))
+                                            LegendDot(color = TaliColors.Navy.copy(alpha = 0.3f), label = "Avg steps", isDashed = true)
+                                        } else {
+                                            LegendDot(color = TaliColors.TealSafe, label = "Active")
+                                            Spacer(Modifier.width(16.dp))
+                                            LegendDot(color = TaliColors.TealSafe.copy(alpha = 0.15f), label = "Resting")
+                                            Spacer(Modifier.width(16.dp))
+                                            LegendDot(color = TaliColors.Navy.copy(alpha = 0.3f), label = "Avg Active", isDashed = true)
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(20.dp))
+
+                                if (viewState == "Mobility Trends") {
+                                    WeeklyBarChart(
+                                        points = currentPoints,
+                                        isYearly = (selectedTimeRange == "Yearly"),
+                                        modifier = Modifier.fillMaxWidth().height(140.dp)
+                                    )
+                                } else {
+                                    WeeklyStackedBarChart(
+                                        points = currentPoints,
+                                        showInnerLabels = (selectedTimeRange == "Weekly"),
+                                        modifier = Modifier.fillMaxWidth().height(140.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                // Incident history
+                Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    SectionHeader(headerTitle)
+                    TaliCard {
+                        Column {
+                            filteredIncidents.forEachIndexed { index, inc ->
+                                IncidentItem(
+                                    time        = inc.time,
+                                    description = inc.description,
+                                    severity    = inc.severity,
+                                    date        = inc.date
+                                )
+                                if (index < filteredIncidents.lastIndex) {
+                                    HorizontalDivider(
+                                        color     = TaliColors.Divider,
+                                        thickness = 0.5.dp,
+                                        modifier  = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        }
 
-            Spacer(Modifier.height(20.dp))
+        // Date Picker overlay
+        if (showDatePicker) {
+            val dateRangePickerState = rememberDateRangePickerState()
+            DatePickerDialog(
+                onDismissRequest = { showDatePicker = false },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val startMs = dateRangePickerState.selectedStartDateMillis
+                            val endMs = dateRangePickerState.selectedEndDateMillis
+                            if (startMs != null && endMs != null) {
+                                val keySdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                                val startDateKey = keySdf.format(java.util.Date(startMs))
+                                val endDateKey = keySdf.format(java.util.Date(endMs))
 
-            // ── Medical Profile ──────────────────────────────────────────────────
-            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                SectionHeader("Medical Profile")
-                TaliCard {
-                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        MedicalRow(Icons.Filled.Bloodtype,   "Blood Type",              "B+")
-                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
-                        MedicalRow(Icons.Filled.Warning,     "Allergies",               "Penicillin, Shellfish")
-                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
-                        MedicalRow(Icons.Filled.LocalHospital,"Underlying Conditions",  "Hypertension, Type 2 Diabetes")
-                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
-                        MedicalRow(Icons.Filled.Medication,  "Current Medications",     "Metformin 500mg, Amlodipine 5mg")
-                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
-                        MedicalRow(Icons.Filled.CalendarMonth,"Last Check-up",          "15 May 2025")
+                                customStartDateKey = startDateKey
+                                customEndDateKey = endDateKey
+                                selectedTimeRange = "Custom"
+                            }
+                            showDatePicker = false
+                        }
+                    ) {
+                        Text("OK", color = TaliColors.TealSafe, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDatePicker = false }) {
+                        Text("Cancel", color = TaliColors.GrayMuted)
+                    }
+                },
+                colors = DatePickerDefaults.colors(
+                    containerColor = TaliColors.Surface
+                )
+            ) {
+                DateRangePicker(
+                    state = dateRangePickerState,
+                    modifier = Modifier.weight(1f).padding(16.dp),
+                    colors = DatePickerDefaults.colors(
+                        selectedDayContainerColor = TaliColors.TealSafe,
+                        todayDateBorderColor = TaliColors.TealSafe
+                    )
+                )
+            }
+        }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  2. PATIENT SCREEN
+// ═══════════════════════════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class) // 👈 ADD THIS OPT-IN LINE ABOVE THE FUNCTION
+@Composable
+private fun getUnitForType(type: String): String {
+    return when (type) {
+        "Pill" -> "pills"
+        "Capsule" -> "capsules"
+        "Liquid" -> "ml"
+        "Injection" -> "units"
+        "Inhaler" -> "puffs"
+        "Drops" -> "drops"
+        "Patch" -> "patches"
+        "Cream", "Ointment" -> "applications"
+        else -> ""
+    }
+}
+
+private fun getIconForType(type: String): ImageVector {
+    return when (type) {
+        "Liquid", "Drops" -> Icons.Filled.WaterDrop
+        "Inhaler" -> Icons.Filled.Air
+        "Injection" -> Icons.Filled.Vaccines
+        "Cream", "Ointment" -> Icons.Filled.LocalPharmacy
+        "Patch" -> Icons.Filled.Healing
+        else -> Icons.Filled.Medication
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PatientScreen(
+    profile: ElderlyProfile?,
+    elderlyUid: String?,
+    onEditPanelVisibilityChanged: (Boolean) -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    val database = FirebaseDatabase.getInstance("https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/").reference
+
+    // Firebase state models
+    var bloodType by remember { mutableStateOf("—") }
+    val allergies = remember { mutableStateListOf<String>() }
+    val conditions = remember { mutableStateListOf<String>() }
+    var lastCheckDate by remember { mutableStateOf("—") }
+    var lastCheckClinic by remember { mutableStateOf("") }
+    val medicines = remember { mutableStateListOf<Medicine>() }
+    val connectedCaregivers = remember { mutableStateListOf<ConnectedCaregiver>() }
+
+    // Dialog & CRUD states
+    var showMedEditPanel by remember { mutableStateOf(false) }
+    var editingMedName by remember { mutableStateOf<String?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var medicineToDelete by remember { mutableStateOf<Medicine?>(null) }
+
+    LaunchedEffect(showMedEditPanel) {
+        onEditPanelVisibilityChanged(showMedEditPanel)
+    }
+
+    LaunchedEffect(elderlyUid) {
+        if (elderlyUid != null) {
+            val caregiversRef = database.child("users").child(elderlyUid).child("caregivers")
+            caregiversRef.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val uidsToFetch = snapshot.children.mapNotNull { it.key }
+                    val currentAuthUid = FirebaseAuth.getInstance().currentUser?.uid
+                    val filteredUids = uidsToFetch.filter { it != currentAuthUid }
+
+                    if (filteredUids.isEmpty()) {
+                        connectedCaregivers.clear()
+                        return
+                    }
+
+                    val fetchedCaregivers = mutableMapOf<String, ConnectedCaregiver>()
+                    var fetchCount = 0
+
+                    filteredUids.forEach { caregiverId ->
+                        database.child("users").child(caregiverId)
+                            .addListenerForSingleValueEvent(object : ValueEventListener {
+                                override fun onDataChange(cgSnapshot: DataSnapshot) {
+                                    val name = cgSnapshot.child("name").getValue(String::class.java) ?: "Caregiver"
+                                    val phone = cgSnapshot.child("phone").getValue(String::class.java) ?: ""
+                                    val caregiver = ConnectedCaregiver(caregiverId, name, phone)
+                                    fetchedCaregivers[caregiverId] = caregiver
+
+                                    fetchCount++
+                                    if (fetchCount == filteredUids.size) {
+                                        connectedCaregivers.clear()
+                                        connectedCaregivers.addAll(filteredUids.mapNotNull { fetchedCaregivers[it] })
+                                    }
+                                }
+
+                                override fun onCancelled(error: DatabaseError) {
+                                    fetchCount++
+                                    if (fetchCount == filteredUids.size) {
+                                        connectedCaregivers.clear()
+                                        connectedCaregivers.addAll(filteredUids.mapNotNull { fetchedCaregivers[it] })
+                                    }
+                                }
+                            })
                     }
                 }
+
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        } else {
+            connectedCaregivers.clear()
+        }
+    }
+
+    LaunchedEffect(elderlyUid) {
+        if (elderlyUid != null) {
+            val medRef = database.child("users").child(elderlyUid).child("medical_profile")
+            medRef.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    bloodType = snapshot.child("blood_type").getValue(String::class.java) ?: "—"
+
+                    allergies.clear()
+                    val allergySnap = snapshot.child("allergies")
+                    if (allergySnap.exists()) {
+                        for (child in allergySnap.children) {
+                            child.getValue(String::class.java)?.let { allergies.add(it) }
+                        }
+                    }
+                    if (allergies.isEmpty()) allergies.add("None")
+
+                    conditions.clear()
+                    val condSnap = snapshot.child("conditions")
+                    if (condSnap.exists()) {
+                        for (child in condSnap.children) {
+                            child.getValue(String::class.java)?.let { conditions.add(it) }
+                        }
+                    }
+                    if (conditions.isEmpty()) conditions.add("None")
+
+                    lastCheckDate = snapshot.child("last_check_date").getValue(String::class.java) ?: "—"
+                    lastCheckClinic = snapshot.child("last_check_clinic").getValue(String::class.java) ?: ""
+
+                    medicines.clear()
+                    val medsSnap = snapshot.child("medicines")
+                    if (medsSnap.exists()) {
+                        for (child in medsSnap.children) {
+                            val id = child.child("id").getValue(Int::class.java) ?: 0
+                            val name = child.child("name").getValue(String::class.java) ?: ""
+                            val dosage = child.child("dosage").getValue(String::class.java) ?: ""
+                            val type = child.child("type").getValue(String::class.java) ?: "Pill"
+                            val isPrn = child.child("isPrn").getValue(Boolean::class.java) ?: false
+                            val slot = child.child("slot").getValue(String::class.java) ?: ""
+                            val start = child.child("startDate").getValue(String::class.java) ?: ""
+                            val end = child.child("endDate").getValue(String::class.java) ?: ""
+                            if (name.isNotEmpty()) {
+                                medicines.add(Medicine(id, name, dosage, type, isPrn, slot, start, end))
+                            }
+                        }
+                    }
+                }
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        }
+    }
+
+    val onMedicineSave = { mName: String, mDosage: String, mType: String, mPrn: Boolean, mSlots: List<String>, mStart: String, mEnd: String ->
+        if (elderlyUid != null) {
+            val remainingMeds = medicines.filter { it.name != mName }.toMutableList()
+            mSlots.forEach { slot ->
+                val nextId = (medicines.map { it.id }.maxOrNull() ?: 0) + 1 + remainingMeds.size
+                remainingMeds.add(
+                    Medicine(
+                        id = nextId,
+                        name = mName,
+                        dosage = mDosage,
+                        type = mType,
+                        isPrn = mPrn,
+                        slot = slot,
+                        startDate = mStart,
+                        endDate = mEnd
+                    )
+                )
             }
+            database.child("users").child(elderlyUid).child("medical_profile").child("medicines")
+                .setValue(remainingMeds)
+            showMedEditPanel = false
+            editingMedName = null
+        }
+    }
 
-            Spacer(Modifier.height(20.dp))
+    Box(modifier = Modifier.fillMaxSize()) {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                isRefreshing = true
+                coroutineScope.launch {
+                    delay(1500)
+                    isRefreshing = false
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(TaliColors.Background)
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 100.dp)
+            ) {
+                // ── Gradient hero header ─────────────────────────────────────────────
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            brush = Brush.verticalGradient(
+                                listOf(TaliColors.Navy, TaliColors.Navy.copy(alpha = 0.85f))
+                            )
+                        )
+                        .padding(top = 48.dp, bottom = 32.dp)
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(
+                            color  = TaliColors.TealSafe.copy(alpha = 0.12f),
+                            radius = size.width * 0.55f,
+                            center = Offset(size.width * 0.85f, 0f)
+                        )
+                    }
 
-            // ── Location card ────────────────────────────────────────────────────
-            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                SectionHeader("Last Known Location")
-                TaliCard {
-                    Row(
-                        modifier          = Modifier
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier            = Modifier
                             .fillMaxWidth()
-                            .padding(20.dp),
+                            .padding(horizontal = 24.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.BottomEnd) {
+                            Box(
+                                modifier = Modifier
+                                    .size(88.dp)
+                                    .background(TaliColors.TealLight, CircleShape)
+                                    .border(3.dp, TaliColors.TealSafe.copy(alpha = 0.5f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("👴", fontSize = 40.sp)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .background(TaliColors.GreenOnline, CircleShape)
+                                    .border(2.dp, TaliColors.Navy, CircleShape)
+                            )
+                        }
+
+                        Spacer(Modifier.height(14.dp))
+
+                        Text(
+                            text       = profile?.name ?: "Elderly User",
+                            fontSize   = 22.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color      = Color.White
+                        )
+                        Text(
+                            text     = profile?.phone ?: "No Phone Registered",
+                            fontSize = 13.sp,
+                            color    = Color.White.copy(alpha = 0.65f)
+                        )
+
+                        Spacer(Modifier.height(16.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PatientTag(label = "🛡 Sensor Armed", color = TaliColors.TealSafe)
+                            PatientTag(label = "🔋 Connected",  color = TaliColors.GreenOnline)
+                            PatientTag(label = "📡 Online",        color = Color(0xFF5B6EF5))
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                // ── Emergency Contacts ───────────────────────────────────────────────
+                Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    SectionHeader("Emergency Contacts")
+                    if (connectedCaregivers.isEmpty()) {
+                        TaliCard {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("No emergency contacts registered", fontSize = 13.sp, color = TaliColors.GrayMuted)
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            val context = LocalContext.current
+                            connectedCaregivers.forEach { caregiver ->
+                                TaliCard(modifier = Modifier.fillMaxWidth()) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // Avatar initials
+                                        Box(
+                                            modifier = Modifier
+                                                .size(46.dp)
+                                                .background(TaliColors.NavyLight, CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text       = if (caregiver.name.isNotEmpty()) caregiver.name.first().toString().uppercase() else "?",
+                                                fontSize   = 18.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = TaliColors.Navy
+                                            )
+                                        }
+
+                                        Spacer(Modifier.width(16.dp))
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = caregiver.name,
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = TaliColors.Navy
+                                            )
+                                            Text(
+                                                text = caregiver.phone,
+                                                fontSize = 13.sp,
+                                                color = TaliColors.GrayMuted
+                                            )
+                                        }
+
+                                        // Call button
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .background(TaliColors.TealLight, CircleShape)
+                                                .clickable {
+                                                    if (caregiver.phone.isNotEmpty()) {
+                                                        val intent = Intent(Intent.ACTION_DIAL).apply {
+                                                            data = Uri.parse("tel:${caregiver.phone}")
+                                                        }
+                                                        context.startActivity(intent)
+                                                    }
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Call,
+                                                contentDescription = "Call ${caregiver.name}",
+                                                tint = TaliColors.TealSafe,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // ── Medical Profile ──────────────────────────────────────────────────
+                Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    SectionHeader("Medical Profile")
+                    TaliCard {
+                        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            MedicalRow(Icons.Filled.Bloodtype,   "Blood Type",              bloodType)
+                            HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
+                            MedicalRow(Icons.Filled.Warning,     "Allergies",               allergies.joinToString(", "))
+                            HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
+                            MedicalRow(Icons.Filled.LocalHospital,"Underlying Conditions",  conditions.joinToString(", "))
+                            HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
+                            val medsText = if (medicines.isEmpty()) "None" else medicines.map { it.name }.distinct().joinToString(", ")
+                            MedicalRow(Icons.Filled.Medication,  "Current Medications",     medsText)
+                            HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
+                            val checkupText = if (lastCheckClinic.isNotEmpty()) "$lastCheckDate ($lastCheckClinic)" else lastCheckDate
+                            MedicalRow(Icons.Filled.CalendarMonth,"Last Check-up",          checkupText)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // ── Medication Manager ───────────────────────────────────────────────
+                Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(46.dp)
-                                .background(TaliColors.NavyLight, RoundedCornerShape(12.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Filled.LocationOn, null, tint = TaliColors.Navy, modifier = Modifier.size(24.dp))
+                        SectionHeader("Medication Manager")
+                        Text(
+                            text = "+ Add Medication",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TaliColors.TealSafe,
+                            modifier = Modifier.clickable {
+                                editingMedName = null
+                                showMedEditPanel = true
+                            }
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TaliCard {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (medicines.isEmpty()) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("No medications scheduled", fontSize = 13.sp, color = TaliColors.GrayMuted)
+                                }
+                            } else {
+                                val grouped = medicines.groupBy { it.name }
+                                grouped.values.forEachIndexed { i, slotList ->
+                                    val first = slotList.first()
+                                    val slotsText = slotList.map { it.slot }.distinct().joinToString(", ")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(38.dp)
+                                                    .background(TaliColors.TealLight, CircleShape),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = getIconForType(first.type),
+                                                    contentDescription = null,
+                                                    tint = TaliColors.TealSafe,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            Spacer(Modifier.width(12.dp))
+                                            Column {
+                                                Text(first.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                                                Text("${first.dosage} · $slotsText", fontSize = 12.sp, color = TaliColors.GrayMuted)
+                                            }
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            IconButton(onClick = {
+                                                editingMedName = first.name
+                                                showMedEditPanel = true
+                                            }) {
+                                                Icon(Icons.Filled.Edit, "Edit", tint = TaliColors.Navy, modifier = Modifier.size(18.dp))
+                                            }
+                                            IconButton(onClick = {
+                                                medicineToDelete = first
+                                                showDeleteConfirm = true
+                                            }) {
+                                                Icon(Icons.Filled.Delete, "Delete", tint = TaliColors.CrimsonAlert, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                    }
+                                    if (i < grouped.size - 1) {
+                                        HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
+                                    }
+                                }
+                            }
                         }
-                        Spacer(Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Living Room", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
-                            Text("Last detected 3 minutes ago", fontSize = 12.sp, color = TaliColors.GrayMuted)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .background(TaliColors.TealLight, RoundedCornerShape(20.dp))
-                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // ── Location card ────────────────────────────────────────────────────
+                Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                    SectionHeader("Last Known Location")
+                    TaliCard {
+                        Row(
+                            modifier          = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("LIVE", fontSize = 10.sp, color = TaliColors.TealSafe, fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 1.sp)
+                            Box(
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .background(TaliColors.NavyLight, RoundedCornerShape(12.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Filled.LocationOn, null, tint = TaliColors.Navy, modifier = Modifier.size(24.dp))
+                            }
+                            Spacer(Modifier.width(14.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Living Room", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                                Text("Last detected 3 minutes ago", fontSize = 12.sp, color = TaliColors.GrayMuted)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .background(TaliColors.TealLight, RoundedCornerShape(20.dp))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Text("LIVE", fontSize = 10.sp, color = TaliColors.TealSafe, fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 1.sp)
+                            }
                         }
                     }
                 }
             }
         }
-    } // 👈 3. ADD THIS CLOSING BRACE AT THE VERY END OF THE FUNCTION
+
+        // Delete Confirm Dialog
+        if (showDeleteConfirm && medicineToDelete != null) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false; medicineToDelete = null },
+                containerColor = TaliColors.Surface,
+                shape = RoundedCornerShape(24.dp),
+                title = { Text("Delete Medication", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy) },
+                text = { Text("Are you sure you want to remove all schedule slots for ${medicineToDelete?.name}?", fontSize = 14.sp, color = TaliColors.GrayMuted) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val nameToDel = medicineToDelete?.name
+                            if (nameToDel != null) {
+                                val remainingMeds = medicines.filter { it.name != nameToDel }
+                                if (elderlyUid != null) {
+                                    database.child("users").child(elderlyUid).child("medical_profile").child("medicines")
+                                        .setValue(remainingMeds)
+                                }
+                            }
+                            showDeleteConfirm = false
+                            medicineToDelete = null
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = TaliColors.CrimsonAlert)
+                    ) {
+                        Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false; medicineToDelete = null }) {
+                        Text("Cancel", color = TaliColors.GrayMuted)
+                    }
+                }
+            )
+        }
+
+        // Slide-up Workspace overlay
+        AnimatedVisibility(
+            visible = showMedEditPanel,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            MedicationEditWorkspace(
+                editingMedName = editingMedName,
+                allMeds = medicines,
+                onMedicineSave = onMedicineSave,
+                onClose = { showMedEditPanel = false; editingMedName = null }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MedicationEditWorkspace(
+    editingMedName       : String?,
+    allMeds              : List<Medicine>,
+    onMedicineSave       : (String, String, String, Boolean, List<String>, String, String) -> Unit,
+    onClose              : () -> Unit
+) {
+    var name       by remember { mutableStateOf("") }
+    var dosage     by remember { mutableStateOf("") }
+    var type       by remember { mutableStateOf("Pill") }
+    var isPrn            by remember { mutableStateOf(false) }
+    val selectedSlots      = remember { mutableStateListOf<String>() }
+
+    var startDate by remember { mutableStateOf("") }
+    var endDate   by remember { mutableStateOf("") }
+    var isOngoing by remember { mutableStateOf(true) }
+
+    LaunchedEffect(editingMedName) {
+        if (editingMedName != null) {
+            val matchingMeds = allMeds.filter { it.name == editingMedName }
+            if (matchingMeds.isNotEmpty()) {
+                val first = matchingMeds.first()
+                name = first.name
+                dosage = first.dosage
+                type = first.type
+                isPrn = first.isPrn
+                startDate = first.startDate
+                endDate = first.endDate
+                isOngoing = first.endDate.isBlank()
+
+                selectedSlots.clear()
+                selectedSlots.addAll(matchingMeds.map { it.slot })
+            }
+        } else {
+            name = ""
+            dosage = ""
+            type = "Pill"
+            isPrn = false
+            startDate = ""
+            endDate = ""
+            isOngoing = true
+            selectedSlots.clear()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.45f))
+            .clickable { onClose() }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .align(Alignment.BottomCenter)
+                .background(
+                    color = TaliColors.Surface,
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                )
+                .clickable(enabled = false) {}
+                .padding(24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (editingMedName == null) "Add Medication" else "Edit Medication",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = TaliColors.Navy
+                    )
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Filled.Close, "Close", tint = TaliColors.GrayMuted)
+                    }
+                }
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Medicine Name") },
+                    placeholder = { Text("e.g. Paracetamol") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = TaliColors.TealSafe,
+                        unfocusedBorderColor = TaliColors.GrayLight
+                    ),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = dosage,
+                    onValueChange = { dosage = it },
+                    label = { Text("Dosage") },
+                    placeholder = { Text("e.g. 500mg, 1 tablet") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = TaliColors.TealSafe,
+                        unfocusedBorderColor = TaliColors.GrayLight
+                    ),
+                    singleLine = true
+                )
+
+                Text("Medication Type", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val types = listOf("Pill", "Capsule", "Liquid", "Injection", "Inhaler", "Drops", "Patch", "Cream")
+                    types.forEach { t ->
+                        val selected = type == t
+                        FilterChip(
+                            selected = selected,
+                            onClick = { type = t },
+                            label = { Text(t) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = TaliColors.TealSafe,
+                                selectedLabelColor = Color.White
+                            )
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("As Needed (PRN)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                        Text("Take only when required", fontSize = 11.sp, color = TaliColors.GrayMuted)
+                    }
+                    Switch(
+                        checked = isPrn,
+                        onCheckedChange = { isPrn = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = TaliColors.TealSafe)
+                    )
+                }
+
+                if (!isPrn) {
+                    Text("Schedule Slots", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val slots = listOf("Morning", "Afternoon", "Evening", "Bedtime")
+                        slots.forEach { slot ->
+                            val selected = selectedSlots.contains(slot)
+                            val bg = if (selected) TaliColors.TealSafe else TaliColors.Surface
+                            val border = if (selected) TaliColors.TealSafe else TaliColors.Divider
+                            val textCol = if (selected) Color.White else TaliColors.Navy
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(bg, RoundedCornerShape(12.dp))
+                                    .border(1.dp, border, RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        if (selected) selectedSlots.remove(slot)
+                                        else selectedSlots.add(slot)
+                                    }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = slot,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = textCol
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = startDate,
+                        onValueChange = { startDate = it },
+                        label = { Text("Start Date") },
+                        placeholder = { Text("e.g. 17 Jun 2026") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = TaliColors.TealSafe,
+                            unfocusedBorderColor = TaliColors.GrayLight
+                        ),
+                        singleLine = true
+                    )
+
+                    if (!isOngoing) {
+                        OutlinedTextField(
+                            value = endDate,
+                            onValueChange = { endDate = it },
+                            label = { Text("End Date") },
+                            placeholder = { Text("e.g. 24 Jun 2026") },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = TaliColors.TealSafe,
+                                unfocusedBorderColor = TaliColors.GrayLight
+                            ),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Ongoing Treatment", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                        Text("No specific end date", fontSize = 11.sp, color = TaliColors.GrayMuted)
+                    }
+                    Switch(
+                        checked = isOngoing,
+                        onCheckedChange = {
+                            isOngoing = it
+                            if (it) endDate = ""
+                        },
+                        colors = SwitchDefaults.colors(checkedThumbColor = TaliColors.TealSafe)
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                val isValid = name.isNotBlank() && dosage.isNotBlank() && (isPrn || selectedSlots.isNotEmpty()) && startDate.isNotBlank()
+                Button(
+                    onClick = {
+                        if (isValid) {
+                            onMedicineSave(
+                                name.trim(),
+                                dosage.trim(),
+                                type,
+                                isPrn,
+                                if (isPrn) listOf("PRN") else selectedSlots.toList(),
+                                startDate.trim(),
+                                if (isOngoing) "" else endDate.trim()
+                            )
+                        }
+                    },
+                    enabled = isValid,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = TaliColors.TealSafe,
+                        disabledContainerColor = TaliColors.Divider
+                    )
+                ) {
+                    Text(
+                        text = if (editingMedName == null) "Save Medication" else "Update Medication",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+    }
 }
 
 // ── Patient tag pill ──────────────────────────────────────────────────────────
@@ -886,10 +2360,37 @@ private fun MedicalRow(icon: ImageVector, label: String, value: String) {
 
 @Composable
 fun SettingsScreen(
+    profile: ElderlyProfile?,
     onNavigateToEditProfile: () -> Unit,
     onNavigateToPrivacySecurity: () -> Unit
 ) {
     val context = LocalContext.current
+
+    val database = remember { FirebaseDatabase.getInstance("https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/").reference }
+    var caregiverName by remember { mutableStateOf<String?>(null) }
+    var caregiverRole by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        val currentUid = FirebaseAuth.getInstance().currentUser?.uid
+        if (currentUid != null) {
+            database.child("users").child(currentUid).addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val name = snapshot.child("name").getValue(String::class.java)
+                    val role = snapshot.child("role").getValue(String::class.java)
+                    caregiverName = if (name.isNullOrEmpty()) "User" else name
+                    caregiverRole = if (role.isNullOrEmpty()) "Caregiver" else role
+                }
+                override fun onCancelled(error: DatabaseError) {
+                    caregiverName = "User"
+                    caregiverRole = "Caregiver"
+                }
+            })
+        } else {
+            caregiverName = "User"
+            caregiverRole = "Caregiver"
+        }
+    }
+
     // ── Local state ──────────────────────────────────────────────────────────
     var pushNotifications by remember { mutableStateOf(true) }
     var smsAlerts         by remember { mutableStateOf(true) }
@@ -947,8 +2448,10 @@ fun SettingsScreen(
                         }
                         Spacer(Modifier.width(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Siti Nurhaliza", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
-                            Text("Primary Caregiver", fontSize = 12.sp, color = TaliColors.GrayMuted)
+                            val dispName = caregiverName ?: "Loading..."
+                            val dispRole = caregiverRole ?: "Loading..."
+                            Text(dispName, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TaliColors.Navy)
+                            Text(dispRole, fontSize = 12.sp, color = TaliColors.GrayMuted)
                         }
                     }
 
@@ -1027,7 +2530,7 @@ fun SettingsScreen(
                         icon     = Icons.Filled.PhoneAndroid,
                         label    = "Elderly Device (IMU)",
                         status   = "Connected",
-                        detail   = "Dato' Ahmad's Phone · Battery 85%",
+                        detail   = "${profile?.name ?: "Elderly"}'s Phone · Connected",
                         isPaired = true
                     )
                     HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
@@ -1055,16 +2558,18 @@ fun SettingsScreen(
                         subtitle = "You will be logged out on this device",
                         tint     = TaliColors.CrimsonAlert,
                         onClick  = {
-                            // ➔ 🟢 REPLACE THE EMPTY CLOSURE WITH THIS NAVIGATION LOGIC:
+                            com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+                            val prefs = context.getSharedPreferences("TaliHayat_Prefs", android.content.Context.MODE_PRIVATE)
+                            prefs.edit().remove("user_role").remove("saved_user_name").apply()
 
-                            // Note: If you use Firebase Auth later, uncomment the line below:
-                            // com.google.firebase.auth.FirebaseAuth.getInstance().signOut()
+                            val serviceIntent = Intent(context, com.group.talihayat.service.FallDetectionService::class.java)
+                            context.stopService(serviceIntent)
 
                             val intent = Intent(context, com.group.talihayat.ui.auth.AuthActivity::class.java).apply {
-                                // These flags clear the history stack so pressing "Back" won't re-open the dashboard
                                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                             }
                             context.startActivity(intent)
+                            (context as? android.app.Activity)?.finish()
                         }
                     )
                 }
@@ -1203,13 +2708,32 @@ private fun HardwareStatusRow(
 fun EditProfileScreen(onBackClick: () -> Unit) {
 
     // ── Field state ──────────────────────────────────────────────────────────
-    var fullName        by remember { mutableStateOf("Siti Nurhaliza") }
-    var phoneNumber     by remember { mutableStateOf("+60 12-345 6789") }
-    var email           by remember { mutableStateOf("siti@talihayat.my") }
+    var fullName        by remember { mutableStateOf("") }
+    var phoneNumber     by remember { mutableStateOf("") }
+    var email           by remember { mutableStateOf("") }
     var newPassword     by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var showPassword    by remember { mutableStateOf(false) }
     var isSaving        by remember { mutableStateOf(false) }
+
+    val database = remember { FirebaseDatabase.getInstance("https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/").reference }
+    val currentUser = remember { FirebaseAuth.getInstance().currentUser }
+
+    LaunchedEffect(Unit) {
+        val uid = currentUser?.uid
+        if (uid != null) {
+            email = currentUser.email ?: ""
+            database.child("users").child(uid).addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val dbName = snapshot.child("name").getValue(String::class.java)
+                    val dbPhone = snapshot.child("phone").getValue(String::class.java)
+                    if (!dbName.isNullOrEmpty()) fullName = dbName
+                    if (!dbPhone.isNullOrEmpty()) phoneNumber = dbPhone
+                }
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        }
+    }
 
     // ── Validation errors ────────────────────────────────────────────────────
     var nameError    by remember { mutableStateOf<String?>(null) }
@@ -1422,7 +2946,37 @@ fun EditProfileScreen(onBackClick: () -> Unit) {
 
                             if (listOf(nameError, phoneError, passError, confirmError).all { it == null }) {
                                 isSaving = true
-                                // Simulate save — replace with real ViewModel call
+                                val uid = currentUser?.uid
+                                if (uid != null) {
+                                    val updates = mapOf(
+                                        "name" to fullName,
+                                        "phone" to phoneNumber
+                                    )
+                                    database.child("users").child(uid).updateChildren(updates)
+                                        .addOnCompleteListener { dbTask ->
+                                            if (dbTask.isSuccessful) {
+                                                if (newPassword.isNotEmpty()) {
+                                                    currentUser.updatePassword(newPassword)
+                                                        .addOnCompleteListener { passTask ->
+                                                            isSaving = false
+                                                            if (passTask.isSuccessful) {
+                                                                onBackClick()
+                                                            } else {
+                                                                passError = passTask.exception?.localizedMessage ?: "Failed to update password"
+                                                            }
+                                                        }
+                                                } else {
+                                                    isSaving = false
+                                                    onBackClick()
+                                                }
+                                            } else {
+                                                isSaving = false
+                                                nameError = dbTask.exception?.localizedMessage ?: "Failed to save details"
+                                            }
+                                        }
+                                } else {
+                                    isSaving = false
+                                }
                             }
                         },
                     contentAlignment = Alignment.Center
@@ -1602,12 +3156,64 @@ private val HomeNavyGrad    = Color(0xFF2D5288)
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+private fun formatLastMovement(timestamp: Long, currentMs: Long): String {
+    if (timestamp <= 0L) return "No movement"
+    val diffMs = currentMs - timestamp
+    if (diffMs < 0) return "Just now"
+    val diffMins = diffMs / 60000
+    if (diffMins < 1) return "Just now"
+    if (diffMins < 60) return "${diffMins}m ago"
+    val diffHours = diffMins / 60
+    if (diffHours < 24) {
+        val remainingMins = diffMins % 60
+        return if (remainingMins > 0) "${diffHours}h ${remainingMins}m ago" else "${diffHours}h ago"
+    }
+    val diffDays = diffHours / 24
+    return "${diffDays}d ago"
+}
+
+private fun formatActivityTime(timestamp: Long): String {
+    val sdf = SimpleDateFormat("h:mm a", Locale.getDefault())
+    val dateStr = sdf.format(java.util.Date(timestamp))
+    
+    val now = java.util.Calendar.getInstance()
+    val timeCalendar = java.util.Calendar.getInstance()
+    timeCalendar.timeInMillis = timestamp
+    
+    return if (now.get(java.util.Calendar.YEAR) == timeCalendar.get(java.util.Calendar.YEAR) &&
+        now.get(java.util.Calendar.DAY_OF_YEAR) == timeCalendar.get(java.util.Calendar.DAY_OF_YEAR)) {
+        "Today, $dateStr"
+    } else if (now.get(java.util.Calendar.YEAR) == timeCalendar.get(java.util.Calendar.YEAR) &&
+        now.get(java.util.Calendar.DAY_OF_YEAR) - timeCalendar.get(java.util.Calendar.DAY_OF_YEAR) == 1) {
+        "Yesterday, $dateStr"
+    } else {
+        SimpleDateFormat("MMM dd, h:mm a", Locale.getDefault()).format(java.util.Date(timestamp))
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
-
+fun CaretakerHomeScreen(
+    elderlySteps: Int,
+    elderlyBattery: Int,
+    profile: ElderlyProfile?,
+    medsTakenCount: String,
+    lastMovementTimestamp: Long,
+    activities: List<FirebaseActivityItem>,
+    onNavigateToTab: (String) -> Unit
+) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var isRefreshing by remember { mutableStateOf(false) }
+
+    var timeMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lastMovementTimestamp) {
+        while (true) {
+            timeMs = System.currentTimeMillis()
+            delay(60000)
+        }
+    }
+    val relativeTime = formatLastMovement(lastMovementTimestamp, timeMs)
 
     // ── Notification badge & dialog states ───────────────────────────────────
     val hasUnseenAlerts = remember { mutableStateOf(true) }
@@ -1792,7 +3398,7 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
 
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text       = "Dato' Ahmad Razali is Safe",
+                                text       = "${profile?.name ?: "Elderly User"} is Safe",
                                 fontSize   = 17.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 color      = TaliColors.Navy,
@@ -1844,24 +3450,43 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
                     .padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                TaliCard(modifier = Modifier.weight(1f)) {
+                TaliCard(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onNavigateToTab("Elder's Hub") }
+                ) {
                     Column(modifier = Modifier.padding(18.dp)) {
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .background(TaliColors.CrimsonLight, RoundedCornerShape(12.dp)),
+                                .background(TaliColors.TealLight, RoundedCornerShape(12.dp)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector        = Icons.Filled.Favorite,
+                                imageVector        = Icons.Filled.Medication,
                                 contentDescription = null,
-                                tint               = HomeHeartRed,
+                                tint               = TaliColors.TealSafe,
                                 modifier           = Modifier.size(20.dp)
                             )
                         }
 
                         Spacer(Modifier.height(12.dp))
 
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text       = medsTakenCount,
+                                fontSize   = 30.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color      = TaliColors.Navy
+                            )
+                        }
+
+                        Text(
+                            text     = "Meds Taken",
+                            fontSize = 12.sp,
+                            color    = TaliColors.GrayMuted,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
 
@@ -2008,12 +3633,19 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
                 ) {
                     QuickActionButton(
                         icon       = Icons.Filled.Call,
-                        label      = "Call Dato' Ahmad",
+                        label      = "Call ${profile?.name ?: "Elderly"}",
                         background = Brush.horizontalGradient(
                             listOf(TaliColors.TealSafe, TaliColors.TealDark)
                         ),
                         shadowColor = TaliColors.TealSafe,
-                        onClick    = { },
+                        onClick    = {
+                            profile?.phone?.let { phoneNum ->
+                                if (phoneNum.isNotEmpty()) {
+                                    val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNum"))
+                                    context.startActivity(intent)
+                                }
+                            }
+                        },
                         modifier   = Modifier.weight(1f)
                     )
 
@@ -2058,8 +3690,8 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
                         )
                         HomeStatDivider()
                         HomeSummaryStat(
-                            value     = "8h 14m",
-                            label     = "Active\nToday",
+                            value     = relativeTime,
+                            label     = "Last Moved",
                             valueColor = TaliColors.TealSafe
                         )
                     }
@@ -2082,38 +3714,105 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
                 )
 
                 TaliCard {
-                    Column {
-                        HomeActivityRow(
-                            icon       = Icons.Filled.HealthAndSafety,
-                            iconColor  = HomeLiveBadge,
-                            iconBg     = HomeGreenLight,
-                            title      = "Daily check-in passed",
-                            subtitle   = "Today, 8:00 AM"
-                        )
-                        HorizontalDivider(
-                            color    = TaliColors.Divider,
-                            thickness = 0.5.dp,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                        HomeActivityRow(
-                            icon       = Icons.Filled.LocationOn,
-                            iconColor  = TaliColors.TealSafe,
-                            iconBg     = TaliColors.TealLight,
-                            title      = "Moved to: Kitchen",
-                            subtitle   = "Today, 7:42 AM"
-                        )
-                        HorizontalDivider(
-                            color    = TaliColors.Divider,
-                            thickness = 0.5.dp,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                        HomeActivityRow(
-                            icon       = Icons.Filled.Bedtime,
-                            iconColor  = TaliColors.Navy,
-                            iconBg     = TaliColors.NavyLight,
-                            title      = "Rest period ended",
-                            subtitle   = "Today, 6:58 AM"
-                        )
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 350.dp)
+                    ) {
+                        if (activities.isEmpty()) {
+                            item {
+                                HomeActivityRow(
+                                    icon       = Icons.Filled.HealthAndSafety,
+                                    iconColor  = HomeLiveBadge,
+                                    iconBg     = HomeGreenLight,
+                                    title      = "Daily check-in passed",
+                                    subtitle   = "Today, 8:00 AM"
+                                )
+                            }
+                            item {
+                                HorizontalDivider(
+                                    color    = TaliColors.Divider,
+                                    thickness = 0.5.dp,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
+                            item {
+                                HomeActivityRow(
+                                    icon       = Icons.Filled.LocationOn,
+                                    iconColor  = TaliColors.TealSafe,
+                                    iconBg     = TaliColors.TealLight,
+                                    title      = "Moved to: Kitchen",
+                                    subtitle   = "Today, 7:42 AM"
+                                )
+                            }
+                            item {
+                                HorizontalDivider(
+                                    color    = TaliColors.Divider,
+                                    thickness = 0.5.dp,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
+                            item {
+                                HomeActivityRow(
+                                    icon       = Icons.Filled.Bedtime,
+                                    iconColor  = TaliColors.Navy,
+                                    iconBg     = TaliColors.NavyLight,
+                                    title      = "Rest period ended",
+                                    subtitle   = "Today, 6:58 AM"
+                                )
+                            }
+                        } else {
+                            itemsIndexed(activities) { index, activity ->
+                                val isEmergency = activity.eventType == "EMERGENCY_CALL"
+                                
+                                val icon = if (isEmergency) Icons.Filled.Warning else {
+                                    when {
+                                        activity.title.contains("check-in", ignoreCase = true) -> Icons.Filled.HealthAndSafety
+                                        activity.title.contains("move", ignoreCase = true) || activity.title.contains("walk", ignoreCase = true) -> Icons.Filled.LocationOn
+                                        else -> Icons.Filled.Notifications
+                                    }
+                                }
+                                
+                                val iconColor = if (isEmergency) TaliColors.CrimsonAlert else {
+                                    when {
+                                        activity.title.contains("check-in", ignoreCase = true) -> HomeLiveBadge
+                                        activity.title.contains("move", ignoreCase = true) || activity.title.contains("walk", ignoreCase = true) -> TaliColors.TealSafe
+                                        else -> TaliColors.Navy
+                                    }
+                                }
+                                
+                                val iconBg = if (isEmergency) TaliColors.CrimsonAlert.copy(alpha = 0.15f) else {
+                                    when {
+                                        activity.title.contains("check-in", ignoreCase = true) -> HomeGreenLight
+                                        activity.title.contains("move", ignoreCase = true) || activity.title.contains("walk", ignoreCase = true) -> TaliColors.TealLight
+                                        else -> TaliColors.NavyLight
+                                    }
+                                }
+                                
+                                val rowBgColor = if (isEmergency) TaliColors.CrimsonAlert.copy(alpha = 0.1f) else Color.Transparent
+                                val titleColor = if (isEmergency) TaliColors.CrimsonAlert else TaliColors.Navy
+                                val fontWeight = if (isEmergency) FontWeight.Bold else FontWeight.SemiBold
+                                
+                                HomeActivityRow(
+                                    icon       = icon,
+                                    iconColor  = iconColor,
+                                    iconBg     = iconBg,
+                                    title      = activity.title,
+                                    subtitle   = formatActivityTime(activity.timestamp),
+                                    rowBgColor = rowBgColor,
+                                    titleColor = titleColor,
+                                    fontWeight = fontWeight
+                                )
+                                
+                                if (index < activities.lastIndex) {
+                                    HorizontalDivider(
+                                        color    = TaliColors.Divider,
+                                        thickness = 0.5.dp,
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2155,7 +3854,7 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
                             iconBg = TaliColors.CrimsonLight,
                             title = "Critical Fall Warning",
                             time = "2:14 PM",
-                            description = "Dato' Ahmad Razali — Impact registered in Living Room Node."
+                            description = "${profile?.name ?: "Elderly"} — Impact registered in Living Room Node."
                         )
                         HorizontalDivider(color = TaliColors.Divider, thickness = 0.5.dp)
 
@@ -2285,11 +3984,15 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
         iconColor: Color,
         iconBg: Color,
         title: String,
-        subtitle: String
+        subtitle: String,
+        rowBgColor: Color = Color.Transparent,
+        titleColor: Color = TaliColors.Navy,
+        fontWeight: FontWeight = FontWeight.SemiBold
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(rowBgColor)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2313,8 +4016,8 @@ fun CaretakerHomeScreen(elderlySteps: Int, elderlyBattery: Int) {
                 Text(
                     text = title,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TaliColors.Navy
+                    fontWeight = fontWeight,
+                    color = titleColor
                 )
                 Text(
                     text = subtitle,

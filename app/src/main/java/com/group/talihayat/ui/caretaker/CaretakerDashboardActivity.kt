@@ -32,12 +32,38 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import com.group.talihayat.ui.theme.*
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.media.AudioAttributes
+import android.os.Build
+import androidx.core.app.NotificationCompat
+
+data class FirebaseActivityItem(
+    val id: String = "",
+    val title: String = "",
+    val eventType: String = "",
+    val timestamp: Long = 0L
+)
 
 // ─────────────────────────────────────────────────
 //  STATE MODEL
 // ─────────────────────────────────────────────────
 
 enum class ComponentState { NORMAL, ALERT }
+
+data class EmergencyContact(
+    val name: String = "",
+    val role: String = "",
+    val phone: String = ""
+)
+
+data class ElderlyProfile(
+    val name: String = "",
+    val phone: String = "",
+    val emergencyContacts: List<EmergencyContact> = emptyList()
+)
 
 // ─────────────────────────────────────────────────
 //  SPRING SPECS
@@ -61,6 +87,21 @@ val DpTween       = tween<Dp>(durationMillis = 500,    easing = FastOutSlowInEas
 class CaretakerDashboardActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                androidx.core.app.ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                    101
+                )
+            }
+        }
+
         setContent {
             TaliHayatTheme {
                 CaretakerDashboardScreen()
@@ -72,25 +113,32 @@ class CaretakerDashboardActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CaretakerDashboardScreen() {
-    var isLinked by remember { mutableStateOf(false) }
-    var isCheckingStatus by remember { mutableStateOf(true) }
-    var elderlyBattery by remember { mutableIntStateOf(100) }
+    // 🟢 FIXED: Replaced boolean with a 3-state router starting at "loading"
+    var currentScreen by remember { mutableStateOf("loading") }
 
+    var elderlyBattery by remember { mutableIntStateOf(100) }
     var appState by remember { mutableStateOf(ComponentState.NORMAL) }
     var showPrivacySecurity by remember { mutableStateOf(false) }
     var currentTab by remember { mutableStateOf("Home") }
     var showEditProfile by remember { mutableStateOf(false) }
 
-    // 🟢 Track Live Steps from Firebase
     var elderlySteps by remember { mutableIntStateOf(0) }
+    var elderlyProfile by remember { mutableStateOf<ElderlyProfile?>(null) }
+    var medsTakenCount by remember { mutableStateOf("0/0") }
+    var pairedElderlyUid by remember { mutableStateOf<String?>(null) }
+    var isMedEditPanelOpen by remember { mutableStateOf(false) }
+    var lastMovementTimestamp by remember { mutableLongStateOf(0L) }
+    var activitiesList by remember { mutableStateOf<List<FirebaseActivityItem>>(emptyList()) }
+    val notifiedAlerts = remember { mutableStateListOf<String>() }
+
+    LaunchedEffect(currentTab) {
+        isMedEditPanelOpen = false
+    }
 
     val context = LocalContext.current
     val database = FirebaseDatabase.getInstance("https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/").reference
-    val caretakerUid = FirebaseAuth.getInstance().currentUser?.uid
 
-    // 🟢 Real-time Steps Sync Listener
     // ── 🟢 1. STARTUP MEMORY CHECK ──
-    // Runs only once when the app opens to see if they are already paired
     LaunchedEffect(Unit) {
         val caretakerUid = FirebaseAuth.getInstance().currentUser?.uid
         if (caretakerUid != null) {
@@ -98,24 +146,23 @@ fun CaretakerDashboardScreen() {
                 .addListenerForSingleValueEvent(object : ValueEventListener {
                     override fun onDataChange(snapshot: DataSnapshot) {
                         if (snapshot.exists()) {
-                            isLinked = true // Skip the QR scanner!
+                            currentScreen = "dashboard" // Skip QR directly to dashboard
+                        } else {
+                            currentScreen = "pairing" // Go to QR scanner
                         }
-                        isCheckingStatus = false // Stop the loading spinner
                     }
                     override fun onCancelled(error: DatabaseError) {
-                        isCheckingStatus = false
+                        currentScreen = "pairing"
                     }
                 })
         } else {
-            isCheckingStatus = false
+            currentScreen = "pairing"
         }
     }
 
     // ── 🟢 2. LIVE DATA SYNC ──
-    // Runs automatically whenever 'isLinked' becomes true (either from startup or scanning)
-    // ── 🟢 2. LIVE DATA SYNC ──
-    LaunchedEffect(isLinked) {
-        if (isLinked) {
+    LaunchedEffect(currentScreen) {
+        if (currentScreen == "dashboard") {
             val caretakerUid = FirebaseAuth.getInstance().currentUser?.uid
             if (caretakerUid != null) {
                 database.child("users").child(caretakerUid).child("pairedElderlyUid")
@@ -123,6 +170,7 @@ fun CaretakerDashboardScreen() {
                         override fun onDataChange(snapshot: DataSnapshot) {
                             val elderlyUid = snapshot.getValue(String::class.java)
                             if (elderlyUid != null) {
+                                pairedElderlyUid = elderlyUid
 
                                 // Stream live steps
                                 database.child("users").child(elderlyUid).child("steps_today")
@@ -133,11 +181,107 @@ fun CaretakerDashboardScreen() {
                                         override fun onCancelled(error: DatabaseError) {}
                                     })
 
-                                // 🟢 NEW: Stream the live battery status from the connected elderly user!
+                                // Stream the live battery status
                                 database.child("users").child(elderlyUid).child("battery_level")
                                     .addValueEventListener(object : ValueEventListener {
                                         override fun onDataChange(batterySnap: DataSnapshot) {
                                             elderlyBattery = batterySnap.getValue(Int::class.java) ?: 100
+                                        }
+                                        override fun onCancelled(error: DatabaseError) {}
+                                    })
+
+                                // Stream last movement timestamp
+                                database.child("users").child(elderlyUid).child("status").child("lastMovement")
+                                    .addValueEventListener(object : ValueEventListener {
+                                        override fun onDataChange(snap: DataSnapshot) {
+                                            lastMovementTimestamp = snap.getValue(Long::class.java) ?: 0L
+                                        }
+                                        override fun onCancelled(error: DatabaseError) {}
+                                    })
+
+                                // Stream the elderly profile (Name, Phone, Emergency Contacts)
+                                database.child("users").child(elderlyUid)
+                                    .addValueEventListener(object : ValueEventListener {
+                                        override fun onDataChange(profileSnap: DataSnapshot) {
+                                            val name = profileSnap.child("name").getValue(String::class.java) ?: "Elderly User"
+                                            val phone = profileSnap.child("phone").getValue(String::class.java) ?: ""
+                                            val contactsList = mutableListOf<EmergencyContact>()
+                                            
+                                            val contactsSnap = profileSnap.child("emergency_contacts")
+                                            if (contactsSnap.exists()) {
+                                                for (child in contactsSnap.children) {
+                                                    val cName = child.child("name").getValue(String::class.java) ?: ""
+                                                    val cRole = child.child("role").getValue(String::class.java) ?: ""
+                                                    val cPhone = child.child("phone").getValue(String::class.java) ?: ""
+                                                    if (cName.isNotEmpty()) {
+                                                        contactsList.add(EmergencyContact(cName, cRole, cPhone))
+                                                    }
+                                                }
+                                            }
+                                            
+                                            elderlyProfile = ElderlyProfile(name, phone, contactsList)
+                                        }
+                                        override fun onCancelled(error: DatabaseError) {}
+                                    })
+
+                                // Stream live medication compliance data
+                                val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+                                database.child("users").child(elderlyUid).child("medical_profile")
+                                    .addValueEventListener(object : ValueEventListener {
+                                        override fun onDataChange(medSnap: DataSnapshot) {
+                                            val totalMeds = medSnap.child("medicines").childrenCount.toInt()
+                                            var takenCount = 0
+                                            val takenLogsSnap = medSnap.child("taken_logs").child(todayStr)
+                                            if (takenLogsSnap.exists()) {
+                                                for (child in takenLogsSnap.children) {
+                                                    val isTaken = child.getValue(Boolean::class.java) ?: false
+                                                     if (isTaken) {
+                                                         takenCount++
+                                                     }
+                                                }
+                                            }
+                                            medsTakenCount = "$takenCount/$totalMeds"
+                                        }
+                                        override fun onCancelled(error: DatabaseError) {}
+                                    })
+
+                                var isFirstLoad = true
+                                // Stream live activities logs
+                                database.child("users").child(elderlyUid).child("activities")
+                                    .addValueEventListener(object : ValueEventListener {
+                                        override fun onDataChange(snap: DataSnapshot) {
+                                            val list = mutableListOf<FirebaseActivityItem>()
+                                            var newEmergencyDetected = false
+                                            var emergencyTitle = "⚠️ Emergency Call Detected"
+                                            val emergencyDesc = "The elderly user has dialed an emergency number!"
+                                            
+                                            for (child in snap.children) {
+                                                val id = child.key ?: ""
+                                                val title = child.child("title").getValue(String::class.java) ?: ""
+                                                val eventType = child.child("eventType").getValue(String::class.java) ?: ""
+                                                val timestamp = child.child("timestamp").getValue(Long::class.java) ?: 0L
+                                                
+                                                list.add(FirebaseActivityItem(id, title, eventType, timestamp))
+                                                
+                                                if (eventType == "EMERGENCY_CALL") {
+                                                    val notifiedKey = "notified_$id"
+                                                    if (isFirstLoad) {
+                                                        notifiedAlerts.add(notifiedKey)
+                                                    } else {
+                                                        if (!notifiedAlerts.contains(notifiedKey)) {
+                                                            notifiedAlerts.add(notifiedKey)
+                                                            newEmergencyDetected = true
+                                                            emergencyTitle = title
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            activitiesList = list.sortedByDescending { it.timestamp }
+                                            isFirstLoad = false
+                                            
+                                            if (newEmergencyDetected) {
+                                                triggerEmergencyNotification(context, emergencyTitle, emergencyDesc, elderlyProfile?.phone)
+                                            }
                                         }
                                         override fun onCancelled(error: DatabaseError) {}
                                     })
@@ -174,102 +318,133 @@ fun CaretakerDashboardScreen() {
             .fillMaxSize()
             .background(Background)
     ) {
+        // 🟢 FIXED: Smoothly route between the 3 main states
         AnimatedContent(
-            targetState = isLinked,
+            targetState = currentScreen,
             transitionSpec = {
-                val enterTransition = fadeIn(
-                    animationSpec = tween(durationMillis = 450, delayMillis = 50, easing = LinearOutSlowInEasing)
-                ) + scaleIn(
-                    initialScale = 0.95f,
-                    animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
-                )
+                if (initialState == "loading") {
+                    fadeIn(tween(400)) togetherWith fadeOut(tween(400))
+                } else {
+                    val enterTransition = fadeIn(
+                        animationSpec = tween(durationMillis = 450, delayMillis = 50, easing = LinearOutSlowInEasing)
+                    ) + scaleIn(
+                        initialScale = 0.95f,
+                        animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
+                    )
 
-                val exitTransition = fadeOut(
-                    animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
-                ) + scaleOut(
-                    targetScale = 0.98f,
-                    animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
-                )
+                    val exitTransition = fadeOut(
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    ) + scaleOut(
+                        targetScale = 0.98f,
+                        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                    )
 
-                enterTransition togetherWith exitTransition
+                    enterTransition togetherWith exitTransition
+                }
             },
-            label = "PairingToDashboardTransition"
-        ) { linked ->
-            if (!linked) {
-                LinkElderlyScreen(
-                    onLinkSuccess = { isLinked = true }
-                )
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    AmbientBlob(accentColor = accentColor, transition = transition)
+            label = "ScreenRouter"
+        ) { screen ->
+            when (screen) {
+                "loading" -> {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Teal)
+                    }
+                }
+                "pairing" -> {
+                    LinkElderlyScreen(
+                        onLinkSuccess = { currentScreen = "dashboard" }
+                    )
+                }
+                "dashboard" -> {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AmbientBlob(accentColor = accentColor, transition = transition)
 
-                    AnimatedContent(
-                        targetState = showEditProfile,
-                        transitionSpec = {
-                            if (targetState) {
-                                (slideInHorizontally { it } + fadeIn(tween(300))) togetherWith
-                                        (slideOutHorizontally { -it / 3 } + fadeOut(tween(300)))
+                        AnimatedContent(
+                            targetState = showEditProfile,
+                            transitionSpec = {
+                                if (targetState) {
+                                    (slideInHorizontally { it } + fadeIn(tween(300))) togetherWith
+                                            (slideOutHorizontally { -it / 3 } + fadeOut(tween(300)))
+                                } else {
+                                    (slideInHorizontally { -it / 3 } + fadeIn(tween(300))) togetherWith
+                                            (slideOutHorizontally { it } + fadeOut(tween(300)))
+                                }
+                            },
+                            label = "ProfileTransition"
+                        ) { isEditing ->
+                            if (isEditing) {
+                                EditProfileScreen(onBackClick = { showEditProfile = false })
                             } else {
-                                (slideInHorizontally { -it / 3 } + fadeIn(tween(300))) togetherWith
-                                        (slideOutHorizontally { it } + fadeOut(tween(300)))
-                            }
-                        },
-                        label = "ProfileTransition"
-                    ) { isEditing ->
-                        if (isEditing) {
-                            EditProfileScreen(onBackClick = { showEditProfile = false })
-                        } else {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                AnimatedContent(targetState = currentTab, label = "TabSwitch") { tab ->
-                                    when (tab) {
-                                        // 🟢 Pass the live synced steps to the UI
-                                        "Home" -> CaretakerHomeScreen(elderlySteps = elderlySteps, elderlyBattery = elderlyBattery)
-                                        "Reports" -> ReportsScreenFull()
-                                        "Elder's Hub" -> PatientScreen()
-                                        "Settings" -> SettingsScreen(
-                                            onNavigateToEditProfile = { showEditProfile = true },
-                                            onNavigateToPrivacySecurity = { showPrivacySecurity = true }
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    AnimatedContent(targetState = currentTab, label = "TabSwitch") { tab ->
+                                        when (tab) {
+                                            "Home" -> CaretakerHomeScreen(
+                                                elderlySteps = elderlySteps,
+                                                elderlyBattery = elderlyBattery,
+                                                profile = elderlyProfile,
+                                                medsTakenCount = medsTakenCount,
+                                                lastMovementTimestamp = lastMovementTimestamp,
+                                                activities = activitiesList,
+                                                onNavigateToTab = { currentTab = it }
+                                            )
+                                            "Reports" -> ReportsScreenFull(pairedElderlyUid)
+                                            "Elder's Hub" -> PatientScreen(
+                                                profile = elderlyProfile,
+                                                elderlyUid = pairedElderlyUid,
+                                                onEditPanelVisibilityChanged = { isMedEditPanelOpen = it }
+                                            )
+                                            "Settings" -> SettingsScreen(
+                                                profile = elderlyProfile,
+                                                onNavigateToEditProfile = { showEditProfile = true },
+                                                onNavigateToPrivacySecurity = { showPrivacySecurity = true }
+                                            )
+                                        }
+                                    }
+
+                                    AnimatedVisibility(
+                                        visible = !isMedEditPanelOpen,
+                                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                                        modifier = Modifier.align(Alignment.BottomCenter)
+                                    ) {
+                                        TaliBottomNavHub(
+                                            currentTab = currentTab,
+                                            onTabSelected = { currentTab = it },
+                                            accentColor = accentColor,
+                                            accentGlow  = accentGlow,
+                                            appState    = appState,
+                                            onSosClick  = {
+                                                val intent = Intent(Intent.ACTION_DIAL).apply {
+                                                    data = Uri.parse("tel:999")
+                                                }
+                                                context.startActivity(intent)
+                                            }
                                         )
                                     }
                                 }
+                            }
 
-                                TaliBottomNavHub(
-                                    currentTab = currentTab,
-                                    onTabSelected = { currentTab = it },
-                                    accentColor = accentColor,
-                                    accentGlow  = accentGlow,
-                                    appState    = appState,
-                                    onSosClick  = {
-                                        val intent = Intent(Intent.ACTION_DIAL).apply {
-                                            data = Uri.parse("tel:999")
-                                        }
-                                        context.startActivity(intent)
-                                    },
-                                    modifier    = Modifier.align(Alignment.BottomCenter)
-                                )
+                            AnimatedVisibility(
+                                visible = showPrivacySecurity,
+                                enter = slideInHorizontally(
+                                    initialOffsetX = { fullWidth -> fullWidth },
+                                    animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+                                ) + fadeIn(animationSpec = tween(350)),
+                                exit = slideOutHorizontally(
+                                    targetOffsetX = { fullWidth -> fullWidth },
+                                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                                ) + fadeOut(animationSpec = tween(300))
+                            ) {
+                                PrivacySecurityScreen(onBackClick = { showPrivacySecurity = false })
                             }
                         }
 
-                        AnimatedVisibility(
-                            visible = showPrivacySecurity,
-                            enter = slideInHorizontally(
-                                initialOffsetX = { fullWidth -> fullWidth },
-                                animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
-                            ) + fadeIn(animationSpec = tween(350)),
-                            exit = slideOutHorizontally(
-                                targetOffsetX = { fullWidth -> fullWidth },
-                                animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
-                            ) + fadeOut(animationSpec = tween(300))
-                        ) {
-                            PrivacySecurityScreen(onBackClick = { showPrivacySecurity = false })
-                        }
+                        SlidingAlertSheet(
+                            visible  = appState == ComponentState.ALERT,
+                            onDismiss = { appState = ComponentState.NORMAL },
+                            onFullScreen = { /* Handle navigation */ }
+                        )
                     }
-
-                    SlidingAlertSheet(
-                        visible  = appState == ComponentState.ALERT,
-                        onDismiss = { appState = ComponentState.NORMAL },
-                        onFullScreen = { /* Handle navigation */ }
-                    )
                 }
             }
         }
@@ -919,28 +1094,43 @@ fun TaliBottomNavHub(
         modifier = modifier
             .fillMaxWidth()
             .height(80.dp)
-            .background(
-                color = Surface,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-            )
             .shadow(
                 elevation = 16.dp,
                 shape     = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                 ambientColor = CardShadow,
                 spotColor    = CardShadow
             )
+            .background(
+                color = Surface,
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            NavItem(Icons.Filled.Home, "Home", currentTab == "Home", accentColor) { onTabSelected("Home") }
-            NavItem(Icons.Filled.Analytics, "Reports", currentTab == "Reports", accentColor) { onTabSelected("Reports") }
+            NavItem(
+                icon = Icons.Filled.Home,
+                label = "Home",
+                isSelected = currentTab == "Home",
+                accentColor = accentColor,
+                modifier = Modifier.weight(1f)
+            ) { onTabSelected("Home") }
 
-            Box(contentAlignment = Alignment.Center) {
+            NavItem(
+                icon = Icons.Filled.Analytics,
+                label = "Reports",
+                isSelected = currentTab == "Reports",
+                accentColor = accentColor,
+                modifier = Modifier.weight(1f)
+            ) { onTabSelected("Reports") }
+
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
                 Box(
                     modifier = Modifier
                         .size(58.dp)
@@ -953,24 +1143,44 @@ fun TaliBottomNavHub(
                         .clickable { onSosClick() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("SOS", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp)
+                    Text(text = "SOS", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp)
                 }
             }
 
-            NavItem(Icons.Filled.Person, "Elder's Hub", currentTab == "Elder's Hub", accentColor) { onTabSelected("Elder's Hub") }
-            NavItem(Icons.Filled.Settings, "Settings", currentTab == "Settings", accentColor) { onTabSelected("Settings") }
+            NavItem(
+                icon = Icons.Filled.Person,
+                label = "Elder's Hub",
+                isSelected = currentTab == "Elder's Hub",
+                accentColor = accentColor,
+                modifier = Modifier.weight(1f)
+            ) { onTabSelected("Elder's Hub") }
+
+            NavItem(
+                icon = Icons.Filled.Settings,
+                label = "Settings",
+                isSelected = currentTab == "Settings",
+                accentColor = accentColor,
+                modifier = Modifier.weight(1f)
+            ) { onTabSelected("Settings") }
         }
     }
 }
 
 @Composable
-fun NavItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, isSelected: Boolean, accentColor: Color, onClick: () -> Unit) {
+fun NavItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    isSelected: Boolean,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     val tint = if (isSelected) accentColor else GrayMuted
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
+        modifier = modifier
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
-            .padding(horizontal = 8.dp)
+            .padding(vertical = 8.dp)
     ) {
         Icon(imageVector = icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
         Text(text = label, fontSize = 9.sp, color = tint, fontWeight = FontWeight.Medium)
@@ -1190,5 +1400,74 @@ fun PremiumCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(content = content)
+    }
+}
+
+private fun triggerEmergencyNotification(context: Context, title: String, desc: String, elderlyPhone: String?) {
+    try {
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "critical_sos_alerts"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channelName = "Critical SOS Alerts"
+            val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Critical alerts for emergency events"
+                enableLights(true)
+                lightColor = android.graphics.Color.RED
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 250, 500, 250, 500)
+                
+                val soundUri = Uri.parse("android.resource://${context.packageName}/raw/emergency_siren")
+                val audioAttributes = AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .build()
+                setSound(soundUri, audioAttributes)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val activityIntent = Intent(context, CaretakerDashboardActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            0,
+            activityIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val soundUri = Uri.parse("android.resource://${context.packageName}/raw/emergency_siren")
+        val builder = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert) // Use public alert icon to ensure compatibility
+            .setContentTitle(title)
+            .setContentText(desc)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setSound(soundUri, android.media.AudioManager.STREAM_ALARM)
+            .setVibrate(longArrayOf(0, 500, 250, 500, 250, 500))
+            .setLights(android.graphics.Color.RED, 3000, 1000)
+            .setColor(android.graphics.Color.RED)
+            .setColorized(true)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+
+        if (!elderlyPhone.isNullOrBlank()) {
+            val callIntent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.parse("tel:$elderlyPhone")
+            }
+            val callPendingIntent = PendingIntent.getActivity(
+                context,
+                1,
+                callIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(android.R.drawable.ic_menu_call, "CALL ELDERLY", callPendingIntent)
+        }
+
+        notificationManager.notify(System.currentTimeMillis().toInt(), builder.build())
+        Log.d("CaretakerDashboard", "Emergency notification posted successfully.")
+    } catch (e: Exception) {
+        Log.e("CaretakerDashboard", "Error showing emergency notification", e)
     }
 }

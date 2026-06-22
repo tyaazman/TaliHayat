@@ -59,6 +59,7 @@ private enum class PairingState { DISPLAY_CODE, CONNECTING, SUCCESS }
 fun PairingScreen(
     pairingToken:     String      = "A1B2C3",
     countdown:        Int         = 60,
+    isLinked:         Boolean     = false,
     onBackClick:      () -> Unit  = {},
     onPairingSuccess: () -> Unit  = {},
 ) {
@@ -69,6 +70,14 @@ fun PairingScreen(
     val checkProgress  = remember { Animatable(0f) }
     val textAlpha      = remember { Animatable(0f) }
     val buttonAlpha    = remember { Animatable(0f) }
+
+    LaunchedEffect(isLinked) {
+        if (isLinked) {
+            pairingState = PairingState.CONNECTING
+            delay(1500L)
+            pairingState = PairingState.SUCCESS
+        }
+    }
 
     LaunchedEffect(pairingState) {
         if (pairingState != PairingState.SUCCESS) return@LaunchedEffect

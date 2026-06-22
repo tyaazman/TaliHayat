@@ -89,9 +89,11 @@ class ElderlyDashboardActivity : ComponentActivity() {
 
     private val fallEventReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.group.talihayat.FALL_DETECTED" && !isFallDetected) {
-                isFallDetected = true
-                triggerFallUI()
+            if (intent?.action == "com.group.talihayat.FALL_DETECTED") {
+                val emergencyIntent = Intent(this@ElderlyDashboardActivity, EmergencyAlertActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                startActivity(emergencyIntent)
             }
         }
     }
@@ -148,6 +150,20 @@ class ElderlyDashboardActivity : ComponentActivity() {
             }
         }
 
+        val callPermissions = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.PROCESS_OUTGOING_CALLS) != PackageManager.PERMISSION_GRANTED) {
+            callPermissions.add(Manifest.permission.PROCESS_OUTGOING_CALLS)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
+            callPermissions.add(Manifest.permission.READ_CALL_LOG)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            callPermissions.add(Manifest.permission.READ_PHONE_STATE)
+        }
+        if (callPermissions.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, callPermissions.toTypedArray(), 102)
+        }
+
         scheduleDailyMedicationAlarms()
 
         val prefs = getSharedPreferences("TaliHayat_Prefs", Context.MODE_PRIVATE)
@@ -159,9 +175,6 @@ class ElderlyDashboardActivity : ComponentActivity() {
         }
         val userName = passedName ?: prefs.getString("saved_user_name", "User") ?: "User"
 
-        val serviceIntent = Intent(this, FallDetectionService::class.java)
-        startForegroundService(serviceIntent)
-
         startPhoneHeartbeat()
         observeCameraStatus()
         observeCloudReachability()
@@ -172,6 +185,8 @@ class ElderlyDashboardActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 var currentScreen by remember { mutableStateOf("loading") }
+                var isLinked by remember { mutableStateOf(false) }
+                var isAlreadyPaired by remember { mutableStateOf(false) }
                 var myPairingToken by remember { mutableStateOf(generateRandomPairingCode()) }
                 var qrCountdown by remember { mutableStateOf(60) }
                 val currentUid = FirebaseAuth.getInstance().currentUser?.uid
@@ -185,7 +200,12 @@ class ElderlyDashboardActivity : ComponentActivity() {
                                 override fun onDataChange(snapshot: DataSnapshot) {
                                     caregiversList.clear()
                                     if (snapshot.exists()) {
-                                        currentScreen = "dashboard"
+                                        isAlreadyPaired = true
+                                        if (currentScreen == "pairing") {
+                                            isLinked = true
+                                        } else {
+                                            currentScreen = "dashboard"
+                                        }
                                         for (child in snapshot.children) {
                                             val caregiverId = child.key ?: continue
                                             database.child("users").child(caregiverId)
@@ -200,37 +220,71 @@ class ElderlyDashboardActivity : ComponentActivity() {
                                                 })
                                         }
                                     } else {
+                                        if (currentScreen != "pairing") {
+                                            currentScreen = "pairing"
+                                        }
+                                    }
+                                }
+                                override fun onCancelled(error: DatabaseError) {
+                                    if (currentScreen != "pairing") {
                                         currentScreen = "pairing"
                                     }
                                 }
-                                override fun onCancelled(error: DatabaseError) { currentScreen = "pairing" }
                             })
-                    } else { currentScreen = "pairing" }
+                    } else {
+                        if (currentScreen != "pairing") {
+                            currentScreen = "pairing"
+                        }
+                    }
+                }
+
+                LaunchedEffect(currentScreen) {
+                    if (currentScreen == "pairing") {
+                        isLinked = false
+                        myPairingToken = generateRandomPairingCode()
+                    }
                 }
 
                 LaunchedEffect(myPairingToken, currentScreen) {
                     if (currentScreen != "pairing") return@LaunchedEffect
+                    isLinked = false
                     val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return@LaunchedEffect
                     val tokenRef = database.child("pairing_tokens").child(myPairingToken)
                     tokenRef.setValue(mapOf("elderlyUid" to uid, "status" to "waiting"))
 
                     val listener = object : ValueEventListener {
                         override fun onDataChange(snapshot: DataSnapshot) {
-                            if (snapshot.child("status").getValue(String::class.java) == "linked") currentScreen = "dashboard"
+                            if (snapshot.child("status").getValue(String::class.java) == "linked") {
+                                isLinked = true
+                            }
                         }
                         override fun onCancelled(error: DatabaseError) {}
                     }
                     tokenRef.addValueEventListener(listener)
 
                     qrCountdown = 60
-                    while (qrCountdown > 0 && currentScreen == "pairing") { delay(1000L); qrCountdown-- }
+                    while (qrCountdown > 0 && currentScreen == "pairing" && !isLinked) { delay(1000L); qrCountdown-- }
                     tokenRef.removeEventListener(listener); tokenRef.removeValue()
-                    if (currentScreen == "pairing") myPairingToken = generateRandomPairingCode()
+                    if (currentScreen == "pairing" && !isLinked) myPairingToken = generateRandomPairingCode()
                 }
 
                 when (currentScreen) {
                     "loading" -> { Box(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FA)), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color(0xFF1E3A5F)) } }
-                    "pairing" -> { PairingScreen(pairingToken = myPairingToken, countdown = qrCountdown, onBackClick = { finish() }, onPairingSuccess = { currentScreen = "dashboard" }) }
+                    "pairing" -> {
+                        PairingScreen(
+                            pairingToken = myPairingToken,
+                            countdown = qrCountdown,
+                            isLinked = isLinked,
+                            onBackClick = {
+                                if (isAlreadyPaired) {
+                                    currentScreen = "dashboard"
+                                } else {
+                                    finish()
+                                }
+                            },
+                            onPairingSuccess = { currentScreen = "dashboard" }
+                        )
+                    }
                     "dashboard" -> {
                         ElderlyDashboardScreen(
                             userName          = userName,
@@ -244,10 +298,31 @@ class ElderlyDashboardActivity : ComponentActivity() {
                             cameraOnline      = cameraOnline.value,
                             stepsCount        = stepsToday.intValue,
                             onCancel          = { cancelFall() },
-                            onSimulate        = { if (!isFallDetected) { isFallDetected = true; triggerFallUI() } },
+                            onSimulate        = {
+                                 val emergencyIntent = Intent(this@ElderlyDashboardActivity, EmergencyAlertActivity::class.java).apply {
+                                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                 }
+                                 startActivity(emergencyIntent)
+                             },
                             onCountdownChange = { countdownDuration.intValue = it },
                             onFallSensitivityChange = { updateHardwareSensitivity(it) },
-                            onLogout = { cancelFall(); finish() }
+                            onConnectCaregiver = { currentScreen = "pairing" },
+                            onLogout = {
+                                 cancelFall()
+                                 FirebaseAuth.getInstance().signOut()
+                                 val prefs = getSharedPreferences("TaliHayat_Prefs", MODE_PRIVATE)
+                                 prefs.edit().remove("user_role").remove("saved_user_name").apply()
+
+                                 // Explicitly stop the fall detection service on logout
+                                 val serviceIntent = Intent(this@ElderlyDashboardActivity, com.group.talihayat.service.FallDetectionService::class.java)
+                                 stopService(serviceIntent)
+
+                                 val intent = Intent(this@ElderlyDashboardActivity, com.group.talihayat.ui.auth.AuthActivity::class.java).apply {
+                                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                                 }
+                                 startActivity(intent)
+                                 finish()
+                             }
                         )
                     }
                 }

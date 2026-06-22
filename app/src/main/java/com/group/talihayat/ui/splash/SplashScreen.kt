@@ -23,6 +23,16 @@ import androidx.compose.ui.unit.*
 import com.group.talihayat.ui.theme.*
 import kotlinx.coroutines.*
 import kotlin.math.*
+import androidx.navigation.NavController
+import androidx.compose.ui.platform.LocalContext
+import android.content.Context
+import android.content.Intent
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.group.talihayat.ui.navigation.Routes
 
 // ─────────────────────────────────────────────────
 //  SPRING SPECS
@@ -42,7 +52,7 @@ private val TextSpring = spring<Float>(
 )
 
 @Composable
-fun TaliHayatSplashScreen(onTimeout: () -> Unit) {
+fun TaliHayatSplashScreen(navController: NavController) {
 
     val ringScale1   = remember { Animatable(0.60f) }
     val ringScale2   = remember { Animatable(0.40f) }
@@ -68,8 +78,9 @@ fun TaliHayatSplashScreen(onTimeout: () -> Unit) {
     val heartScale   = remember { Animatable(1f) }
 
     val density = LocalDensity.current
+    val context = LocalContext.current
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(key1 = true) {
         launch {
             ringAlpha1.animateTo(1f, tween(600, easing = FastOutSlowInEasing))
         }
@@ -144,8 +155,65 @@ fun TaliHayatSplashScreen(onTimeout: () -> Unit) {
             }
         }
 
-        delay(900)
-        onTimeout()
+        // delay 2000L inside the effect so the user has time to actually see the logo
+        delay(2000L)
+
+        // Auth & Role Routing
+        val currentUser = FirebaseAuth.getInstance().currentUser
+        if (currentUser == null) {
+            navController.navigate(Routes.Login) {
+                popUpTo(Routes.Splash) { inclusive = true }
+            }
+        } else {
+            val prefs = context.getSharedPreferences("TaliHayat_Prefs", Context.MODE_PRIVATE)
+            val role = prefs.getString("user_role", null)
+            if (role?.trim()?.equals("Caretaker", ignoreCase = true) == true) {
+                val serviceIntent = Intent(context, com.group.talihayat.service.FallDetectionService::class.java)
+                context.stopService(serviceIntent)
+                navController.navigate(Routes.CaretakerDashboard) {
+                    popUpTo(Routes.Splash) { inclusive = true }
+                }
+            } else if (role?.trim()?.equals("Elderly", ignoreCase = true) == true) {
+                val serviceIntent = Intent(context, com.group.talihayat.service.FallDetectionService::class.java)
+                context.startForegroundService(serviceIntent)
+                navController.navigate(Routes.ElderlyDashboard) {
+                    popUpTo(Routes.Splash) { inclusive = true }
+                }
+            } else {
+                // If role not found in SharedPreferences, fetch from database as fallback
+                val database = FirebaseDatabase.getInstance(
+                    "https://talihayat-bfc99-default-rtdb.asia-southeast1.firebasedatabase.app/"
+                ).reference
+                database.child("users").child(currentUser.uid).addListenerForSingleValueEvent(object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        val roleFromDb = snapshot.child("role").getValue(String::class.java) ?: "Caretaker"
+                        val name = snapshot.child("name").getValue(String::class.java) ?: "User"
+                        prefs.edit()
+                            .putString("user_role", roleFromDb)
+                            .putString("saved_user_name", name)
+                            .apply()
+                        
+                        val route = if (roleFromDb.trim().equals("Elderly", ignoreCase = true)) {
+                            val serviceIntent = Intent(context, com.group.talihayat.service.FallDetectionService::class.java)
+                            context.startForegroundService(serviceIntent)
+                            Routes.ElderlyDashboard
+                        } else {
+                            val serviceIntent = Intent(context, com.group.talihayat.service.FallDetectionService::class.java)
+                            context.stopService(serviceIntent)
+                            Routes.CaretakerDashboard
+                        }
+                        navController.navigate(route) {
+                            popUpTo(Routes.Splash) { inclusive = true }
+                        }
+                    }
+                    override fun onCancelled(error: DatabaseError) {
+                        navController.navigate(Routes.Login) {
+                            popUpTo(Routes.Splash) { inclusive = true }
+                        }
+                    }
+                })
+            }
+        }
     }
 
     val driftInfinite = rememberInfiniteTransition(label = "AmbientDrift")

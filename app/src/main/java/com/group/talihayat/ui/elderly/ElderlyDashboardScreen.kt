@@ -57,6 +57,7 @@ fun ElderlyDashboardScreen(
     onSimulate           : () -> Unit,
     onCountdownChange    : (Int) -> Unit,
     onFallSensitivityChange: (Float) -> Unit,
+    onConnectCaregiver   : () -> Unit,
     onLogout             : () -> Unit
 ) {
     var currentTab by remember { mutableStateOf("Home") }
@@ -141,6 +142,7 @@ fun ElderlyDashboardScreen(
                             onHighContrastChange = { selectedValue -> globalHighContrast = selectedValue; com.group.talihayat.ui.theme.isHighContrastModeActive = selectedValue },
                             onCountdownDurationChange = onCountdownChange,
                             onFallSensitivityChange = onFallSensitivityChange,
+                            onConnectCaregiver = onConnectCaregiver,
                             onLogout = onLogout
                         )
                     }
@@ -424,7 +426,7 @@ private fun SafetyTipsFooter(fontSize: AppFontSize, modifier: Modifier = Modifie
 }
 
 @Composable
-private fun FallCountdownOverlay(countdown: Int, onCancel: () -> Unit) {
+fun FallCountdownOverlay(countdown: Int, onCancel: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize().background(ElderlyColors.DangerBackground), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
             Icon(imageVector = Icons.Filled.Warning, contentDescription = null, tint = ElderlyColors.CancelYellow, modifier = Modifier.size(64.dp))
@@ -443,7 +445,7 @@ private fun FallCountdownOverlay(countdown: Int, onCancel: () -> Unit) {
 }
 
 @Composable
-private fun HelpSentOverlay() {
+fun HelpSentOverlay() {
     Box(modifier = Modifier.fillMaxSize().background(ElderlyColors.SentBackground), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(imageVector = Icons.Filled.LocalHospital, contentDescription = null, tint = Color.White, modifier = Modifier.size(80.dp))
