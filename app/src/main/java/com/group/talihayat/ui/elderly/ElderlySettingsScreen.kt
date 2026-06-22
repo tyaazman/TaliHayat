@@ -55,6 +55,7 @@ fun ElderlySettingsScreen(
     onHighContrastChange: (Boolean) -> Unit,
     onCountdownDurationChange: (Int) -> Unit,
     onFallSensitivityChange: (Float) -> Unit,
+    onConnectCaregiver: () -> Unit,
     onLogout: () -> Unit
 ) {
     // ── FIREBASE INITIALIZATION ──
@@ -337,7 +338,34 @@ fun ElderlySettingsScreen(
                         Spacer(Modifier.height(32.dp))
 
                         // ══════════════════════════════════════════════════════════════════
-                        //  5. LOGOUT SAFEGUARD
+                        //  5. CAREGIVER LINK
+                        // ══════════════════════════════════════════════════════════════════
+                        SettingsSectionLabel("CAREGIVER CONNECTION")
+
+                        ElderlyCard(modifier = Modifier.padding(horizontal = 20.dp)) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onConnectCaregiver() }
+                                    .padding(18.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(Modifier.size(44.dp).background(ElderlyColors.NavySurface, RoundedCornerShape(13.dp)), Alignment.Center) {
+                                    Icon(Icons.Filled.Link, null, tint = ElderlyColors.NavyBlue, modifier = Modifier.size(24.dp))
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Connect Caregiver", fontSize = 16.scaled(fontSize), fontWeight = FontWeight.Bold, color = ElderlyColors.PrimaryText)
+                                    Text("Generate a code to link a new caregiver", fontSize = 13.scaled(fontSize), color = ElderlyColors.GrayMuted)
+                                }
+                                Icon(Icons.Filled.ChevronRight, null, tint = ElderlyColors.GrayMuted, modifier = Modifier.size(22.dp))
+                            }
+                        }
+
+                        Spacer(Modifier.height(32.dp))
+
+                        // ══════════════════════════════════════════════════════════════════
+                        //  6. LOGOUT SAFEGUARD
                         // ══════════════════════════════════════════════════════════════════
                         SettingsSectionLabel("ACCOUNT DISCONNECTION")
 

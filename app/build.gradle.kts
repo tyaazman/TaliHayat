@@ -63,6 +63,7 @@ dependencies {
     implementation(libs.compose.icons.extended)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.navigation.compose)
 
     // Standard AndroidX libraries
     implementation(libs.androidx.core.ktx)
